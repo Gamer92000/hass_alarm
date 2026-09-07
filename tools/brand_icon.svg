@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <!-- Voice Alarms brand icon: a ringing twin-bell alarm clock on an indigo disc. -->
+  <defs>
+    <linearGradient id="disc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#312e81"/>
+    </linearGradient>
+    <!-- sound waves, centred on the clock (128,132) -->
+    <g id="wave" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-opacity="0.95">
+      <path d="M202.3,97.3 A82,82 0 0 1 202.3,166.7"/>
+      <path d="M220.4,88.9 A102,102 0 0 1 220.4,175.1"/>
+    </g>
+    <!-- side bell: half-disc sitting on the case rim, extended into the case so it joins seamlessly -->
+    <path id="bell" d="M106,72 A22,22 0 0 1 150,72 L150,82 L106,82 Z" fill="#f59e0b"/>
+    <rect id="foot" x="121" y="184" width="14" height="26" rx="6" fill="#f59e0b"/>
+  </defs>
+
+  <circle cx="128" cy="128" r="120" fill="url(#disc)"/>
+
+  <use href="#wave"/>
+  <use href="#wave" transform="matrix(-1 0 0 1 256 0)"/>
+
+  <!-- clock, centred at (128,132) -->
+  <use href="#bell" transform="rotate(-40 128 132)"/>
+  <use href="#bell" transform="rotate(40 128 132)"/>
+  <use href="#foot" transform="rotate(-30 128 132)"/>
+  <use href="#foot" transform="rotate(30 128 132)"/>
+  <!-- hammer between the bells -->
+  <rect x="125" y="60" width="6" height="20" fill="#fbbf24"/>
+  <circle cx="128" cy="59" r="7" fill="#fbbf24"/>
+  <!-- case and face -->
+  <circle cx="128" cy="132" r="60" fill="#fbbf24"/>
+  <circle cx="128" cy="132" r="48" fill="#ffffff"/>
+  <!-- hands at ten past ten -->
+  <g stroke="#312e81" stroke-width="8" stroke-linecap="round" fill="none">
+    <path d="M128,132 L105.5,119"/>
+    <path d="M128,132 L159.2,114"/>
+  </g>
+  <circle cx="128" cy="132" r="5" fill="#312e81"/>
+</svg>
