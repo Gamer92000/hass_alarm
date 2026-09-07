@@ -2,6 +2,9 @@
 
 [![ci](https://git.imhof.cloud/julian/hass_alarm/actions/workflows/ci.yml/badge.svg?branch=main)](https://git.imhof.cloud/julian/hass_alarm/actions)
 
+[![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Gamer92000&repository=hass_alarm&category=integration)
+[![Open your Home Assistant instance and start setting up the integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=voice_alarms)
+
 Alarms and reminders that ring on your **Assist voice satellites** (Home Assistant Voice PE,
 ESPHome satellites, Wyoming satellites, …), managed by voice through your LLM conversation
 agent or through a panel in the Home Assistant UI.
@@ -30,12 +33,22 @@ integration relies on the LLM tools platform introduced in 2026.8 and the curren
 
 ## Installation
 
-1. Copy `custom_components/voice_alarms` into your Home Assistant `config/custom_components/`
-   folder (or add this repository to HACS as a custom repository).
-2. Restart Home Assistant.
-3. *Settings → Devices & services → Add integration → Voice Alarms*. The dialog shows the
-   options described below; everything can be changed later via *Configure*.
-4. Open the **Voice Alarms** entry in the sidebar.
+**HACS (recommended):** click the *Open in HACS* button above, or add
+`https://github.com/Gamer92000/hass_alarm` in HACS as a custom repository of type
+*Integration*. Install it, then restart Home Assistant.
+
+**Manual:** copy `custom_components/voice_alarms` into your Home Assistant
+`config/custom_components/` folder and restart Home Assistant.
+
+Then:
+
+1. *Settings → Devices & services → Add integration → Voice Alarms* (or click the *Add
+   integration* button above). The dialog shows the options described below; everything can
+   be changed later via *Configure*.
+2. Open the **Voice Alarms** entry in the sidebar.
+
+The GitHub repository is a read-only mirror kept for HACS. Development, issues and pull
+requests live at <https://git.imhof.cloud/julian/hass_alarm>.
 
 `ffmpeg` (present on Home Assistant OS / container) is only needed for the volume ramp on
 *custom* sounds. The built-in sound never needs it.

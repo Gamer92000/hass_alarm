@@ -13,7 +13,8 @@
     "panel_custom",
     "websocket_api"
   ],
-  "documentation": "https://git.imhof.cloud/julian/hass_alarm",
+  "documentation": "https://github.com/Gamer92000/hass_alarm",
+  "issue_tracker": "https://git.imhof.cloud/julian/hass_alarm/issues",
   "integration_type": "service",
   "iot_class": "local_push",
   "requirements": [],
