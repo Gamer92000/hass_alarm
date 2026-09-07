@@ -1,0 +1,140 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Voice Alarms",
+        "description": "Alarms and reminders for your voice satellites. All settings can be changed later.",
+        "data": {
+          "default_duration": "Ring duration",
+          "ramp_seconds": "Volume ramp-up time",
+          "ramp_start": "Start level of the volume ramp",
+          "alarm_volume": "Satellite volume while ringing (leave empty to keep the current volume)",
+          "default_sound": "Alarm sound (URL or media-source id, empty = built-in sound)",
+          "reminder_repeats": "How often a reminder is spoken",
+          "reminder_interval": "Pause between reminder repeats",
+          "missed_grace": "Still ring an alarm if it was missed by at most",
+          "device_stop_pause": "When the alarm is stopped on the device itself, resume ringing after (0 = treat as dismissed)"
+        }
+      }
+    },
+    "error": {
+      "invalid_sound": "Use an http(s) URL, a path starting with / or a media-source:// id."
+    },
+    "abort": {
+      "single_instance_allowed": "Voice Alarms is already configured.",
+      "already_configured": "Voice Alarms is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Voice Alarms settings",
+        "data": {
+          "default_duration": "Ring duration",
+          "ramp_seconds": "Volume ramp-up time",
+          "ramp_start": "Start level of the volume ramp",
+          "alarm_volume": "Satellite volume while ringing (leave empty to keep the current volume)",
+          "default_sound": "Alarm sound (URL or media-source id, empty = built-in sound)",
+          "reminder_repeats": "How often a reminder is spoken",
+          "reminder_interval": "Pause between reminder repeats",
+          "missed_grace": "Still ring an alarm if it was missed by at most",
+          "device_stop_pause": "When the alarm is stopped on the device itself, resume ringing after (0 = treat as dismissed)"
+        }
+      }
+    },
+    "error": {
+      "invalid_sound": "Use an http(s) URL, a path starting with / or a media-source:// id."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "next_alarm": { "name": "Next alarm" }
+    },
+    "binary_sensor": {
+      "ringing": { "name": "Ringing" }
+    },
+    "button": {
+      "dismiss": { "name": "Dismiss alarm" },
+      "test": { "name": "Test alarm sound" }
+    }
+  },
+  "services": {
+    "add_alarm": {
+      "name": "Add alarm",
+      "description": "Create an alarm or reminder on a voice satellite.",
+      "fields": {
+        "target": { "name": "Satellite", "description": "The assist satellite the alarm rings on." },
+        "time": { "name": "Time", "description": "24-hour time, e.g. 06:30." },
+        "date": { "name": "Date", "description": "Date for a one-time alarm (YYYY-MM-DD, today, tomorrow, weekday name). Ignored when weekdays are set." },
+        "weekdays": { "name": "Repeat on", "description": "Weekdays (mon..sun) for a repeating alarm. Leave empty for a one-time alarm." },
+        "name": { "name": "Name", "description": "Label for the alarm." },
+        "message": { "name": "Message", "description": "Text to speak. Makes this a reminder instead of an alarm." },
+        "kind": { "name": "Kind", "description": "alarm or reminder (derived from the message when omitted)." },
+        "duration": { "name": "Ring duration", "description": "Seconds the alarm sound plays. Defaults to the integration setting." },
+        "sound": { "name": "Sound", "description": "URL or media-source id of a custom sound for this alarm." },
+        "enabled": { "name": "Enabled", "description": "Whether the alarm is active." }
+      }
+    },
+    "update_alarm": {
+      "name": "Update alarm",
+      "description": "Change an existing alarm.",
+      "fields": {
+        "alarm_id": { "name": "Alarm id", "description": "Id of the alarm." },
+        "target": { "name": "Satellite", "description": "Move the alarm to this satellite." },
+        "time": { "name": "Time", "description": "New time (HH:MM)." },
+        "date": { "name": "Date", "description": "New date for a one-time alarm." },
+        "weekdays": { "name": "Repeat on", "description": "New weekdays; empty list makes it one-time." },
+        "name": { "name": "Name", "description": "New label." },
+        "message": { "name": "Message", "description": "New reminder text." },
+        "kind": { "name": "Kind", "description": "alarm or reminder." },
+        "duration": { "name": "Ring duration", "description": "Seconds the alarm sound plays." },
+        "sound": { "name": "Sound", "description": "Custom sound for this alarm." },
+        "enabled": { "name": "Enabled", "description": "Enable or disable the alarm." }
+      }
+    },
+    "delete_alarm": {
+      "name": "Delete alarm",
+      "description": "Delete an alarm.",
+      "fields": {
+        "alarm_id": { "name": "Alarm id", "description": "Id of the alarm." }
+      }
+    },
+    "skip_next": {
+      "name": "Skip next occurrence",
+      "description": "Skip (or reinstate) only the next occurrence of a repeating alarm.",
+      "fields": {
+        "alarm_id": { "name": "Alarm id", "description": "Id of the alarm." },
+        "undo": { "name": "Undo", "description": "Reinstate the skipped occurrence." }
+      }
+    },
+    "dismiss": {
+      "name": "Dismiss",
+      "description": "Stop a ringing alarm or reminder.",
+      "fields": {
+        "target": { "name": "Satellite", "description": "Only stop the alarm on this satellite. Leave empty to stop all." }
+      }
+    },
+    "snooze": {
+      "name": "Snooze",
+      "description": "Stop a ringing alarm and ring it again in a few minutes.",
+      "fields": {
+        "target": { "name": "Satellite", "description": "Only snooze the alarm on this satellite. Leave empty for all." },
+        "minutes": { "name": "Minutes", "description": "Minutes until it rings again." }
+      }
+    },
+    "list_alarms": {
+      "name": "List alarms",
+      "description": "Return all alarms and what is currently ringing."
+    },
+    "test_alarm": {
+      "name": "Test alarm",
+      "description": "Ring the alarm sound (or speak a reminder) on a satellite right now.",
+      "fields": {
+        "target": { "name": "Satellite", "description": "The assist satellite to test." },
+        "duration": { "name": "Duration", "description": "Seconds to ring." },
+        "sound": { "name": "Sound", "description": "Custom sound to test." },
+        "message": { "name": "Message", "description": "Speak this as a reminder instead of ringing." }
+      }
+    }
+  }
+}

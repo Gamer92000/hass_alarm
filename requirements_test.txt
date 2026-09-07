@@ -1,0 +1,16 @@
+# Test environment: Home Assistant 2026.9 (needs Python >= 3.14.2) plus the
+# requirements of the core integrations voice_alarms depends on.
+homeassistant==2026.9.0
+pytest-homeassistant-custom-component==0.13.363
+pytest-timeout==2.4.0
+ruff==0.16.6
+
+# requirements of assist_satellite / assist_pipeline / conversation / ffmpeg / frontend
+gazetteer-matcher==1.1.0
+ha-ffmpeg==3.2.2
+hassil==3.12.0
+home-assistant-frontend==20260826.4
+home-assistant-intents==2026.8.28
+mutagen==1.48.1
+pymicro-vad==1.0.1
+pyspeex-noise==1.0.2
