@@ -1,5 +1,7 @@
 # Voice Alarms for Home Assistant
 
+[![ci](https://git.imhof.cloud/julian/hass_alarm/actions/workflows/ci.yml/badge.svg?branch=main)](https://git.imhof.cloud/julian/hass_alarm/actions)
+
 Alarms and reminders that ring on your **Assist voice satellites** (Home Assistant Voice PE,
 ESPHome satellites, Wyoming satellites, …), managed by voice through your LLM conversation
 agent or through a panel in the Home Assistant UI.
@@ -132,9 +134,13 @@ Per alarm: `switch.<label>` to enable or disable it (attributes contain all alar
 
 ## Development
 
+Python 3.14 is required (Home Assistant 2026.9 needs it). The pinned test
+environment is in `requirements_test.txt`; CI runs exactly this:
+
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install "homeassistant==2026.9.0" pytest-homeassistant-custom-component
+uv venv .venv --python 3.14 && . .venv/bin/activate
+uv pip install -r requirements_test.txt
+ruff check custom_components tests tools && ruff format --check custom_components tests tools
 pytest
 ```
 

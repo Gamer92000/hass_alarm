@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Home Assistant 2026.9 needs Python >= 3.14.2; uv ships a standalone build
+      # that works on any glibc runner image.
+      - name: Install uv and Python 3.14
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          uv python install 3.14
+          uv venv .venv --python 3.14
+          .venv/bin/python --version
+
+      - name: Install test requirements
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          uv pip install --python .venv -r requirements_test.txt
+          # Native audio helpers used by assist_pipeline; the test suite stubs
+          # them when no wheel is available for the runner.
+          uv pip install --python .venv pymicro-vad==1.0.1 pyspeex-noise==1.0.2 \
+            || echo "pymicro-vad / pyspeex-noise not installable here, tests will stub them"
+
+      - name: Lint
+        run: |
+          .venv/bin/ruff check custom_components tests tools
+          .venv/bin/ruff format --check custom_components tests tools
+
+      - name: Test
+        run: .venv/bin/pytest -q -p no:cacheprovider --timeout 120
