@@ -37,6 +37,8 @@ const STYLE = `
   .grow { flex: 1; min-width: 160px; }
   .label { font-size: 16px; font-weight: 500; }
   .sub { color: var(--secondary-text-color); font-size: 14px; margin-top: 2px; }
+  .message { font-size: 15px; font-style: italic; margin-top: 2px; }
+  .card.reminder .time { color: var(--primary-color); }
   .badges { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
   .badge { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--secondary-background-color, #eee); color: var(--secondary-text-color); }
   .badge.warn { background: var(--warning-color, #ffa600); color: #000; }
@@ -186,7 +188,8 @@ class VoiceAlarmsPanel extends HTMLElement {
     const now = new Date();
     const parts = [];
     parts.push(`<div class="toolbar">${icon("alarm")}<h1>Voice Alarms</h1>
-      <button data-action="add">${icon("plus")} Add alarm</button></div><main>`);
+      <button data-action="add" data-kind="alarm">${icon("plus")} Add alarm</button>
+      <button data-action="add" data-kind="reminder">${icon("plus")} Add reminder</button></div><main>`);
     if (this._error) parts.push(`<div class="error">${esc(this._error)}</div>`);
     if (!st) {
       parts.push(`<div class="empty">Loading…</div></main>`);
@@ -200,32 +203,18 @@ class VoiceAlarmsPanel extends HTMLElement {
         <div class="actions"><button class="ghost" data-action="snooze" data-target="${esc(s.target)}">Snooze 5 min</button>
         <button class="danger" data-action="dismiss" data-target="${esc(s.target)}">${icon("stop")} Dismiss</button></div></div></div>`);
     }
-    parts.push(`<h2>Alarms &amp; reminders</h2>`);
-    if (!st.alarms.length) {
+    const alarms = st.alarms.filter((a) => a.kind !== "reminder");
+    const reminders = st.alarms.filter((a) => a.kind === "reminder");
+    parts.push(`<h2>Alarms</h2>`);
+    if (!alarms.length) {
       parts.push(`<div class="card empty">No alarms yet. Add one here or say “set an alarm for 7” to a satellite.</div>`);
     }
-    for (const a of st.alarms) {
-      const target = this._target(a.target);
-      const badges = [];
-      if (a.kind === "reminder") badges.push(`<span class="badge info">Reminder</span>`);
-      if (!a.enabled) badges.push(`<span class="badge">Disabled</span>`);
-      if (a.next_skipped) badges.push(`<span class="badge warn">Next occurrence skipped</span>`);
-      if (a.enabled && !a.next) badges.push(`<span class="badge err">In the past</span>`);
-      if (!target) badges.push(`<span class="badge err">Unknown satellite</span>`);
-      const schedule = a.is_recurring ? formatDays(a.weekdays) : a.date ? formatDate(a.date, this._locale) : "once";
-      parts.push(`<div class="card ${a.enabled ? "" : "disabled"}"><div class="row">
-        <div class="time">${esc(a.time)}</div>
-        <div class="grow"><div class="label">${esc(a.label)}</div>
-          <div class="sub">${esc(schedule)} · ${esc(target ? target.display : a.target)}${a.message && a.message !== a.label ? " · “" + esc(a.message) + "”" : ""}</div>
-          <div class="sub">${a.enabled ? esc(formatNext(a.next, now, this._locale)) : ""}</div>
-          <div class="badges">${badges.join("")}</div></div>
-        <div class="actions">
-          <label class="switch" title="Enabled"><input type="checkbox" data-action="toggle" data-id="${esc(a.id)}" ${a.enabled ? "checked" : ""}><span></span></label>
-          ${a.is_recurring ? `<button class="icon" title="${a.next_skipped ? "Reinstate next occurrence" : "Skip next occurrence"}" data-action="${a.next_skipped ? "unskip" : "skip"}" data-id="${esc(a.id)}">${icon(a.next_skipped ? "undo" : "skip")}</button>` : ""}
-          <button class="icon" title="Edit" data-action="edit" data-id="${esc(a.id)}">${icon("edit")}</button>
-          <button class="icon" title="Delete" data-action="delete" data-id="${esc(a.id)}">${icon("del")}</button>
-        </div></div></div>`);
+    for (const a of alarms) parts.push(this._renderAlarm(a, now));
+    parts.push(`<h2>Reminders</h2>`);
+    if (!reminders.length) {
+      parts.push(`<div class="card empty">No reminders yet. Add one here or say “remind me at 6 to take out the trash” to a satellite.</div>`);
     }
+    for (const a of reminders) parts.push(this._renderAlarm(a, now));
     parts.push(`<h2>Satellites</h2><div class="card">`);
     if (!st.targets.length) parts.push(`<div class="note">No assist satellites found. Add a Voice PE / Wyoming satellite first.</div>`);
     for (const t of st.targets) {
@@ -246,6 +235,30 @@ class VoiceAlarmsPanel extends HTMLElement {
     app.innerHTML = parts.join("");
   }
 
+  _renderAlarm(a, now) {
+    const target = this._target(a.target);
+    const reminder = a.kind === "reminder";
+    const badges = [];
+    if (!a.enabled) badges.push(`<span class="badge">Disabled</span>`);
+    if (a.next_skipped) badges.push(`<span class="badge warn">Next occurrence skipped</span>`);
+    if (a.enabled && !a.next) badges.push(`<span class="badge err">In the past</span>`);
+    if (!target) badges.push(`<span class="badge err">Unknown satellite</span>`);
+    const schedule = a.is_recurring ? formatDays(a.weekdays) : a.date ? formatDate(a.date, this._locale) : "once";
+    const message = a.message && a.message !== a.label ? `<div class="message">“${esc(a.message)}”</div>` : "";
+    return `<div class="card ${reminder ? "reminder" : ""} ${a.enabled ? "" : "disabled"}"><div class="row">
+      <div class="time">${esc(a.time)}</div>
+      <div class="grow"><div class="label">${esc(a.label)}</div>${message}
+        <div class="sub">${esc(schedule)} · ${esc(target ? target.display : a.target)}</div>
+        <div class="sub">${a.enabled ? esc(formatNext(a.next, now, this._locale)) : ""}</div>
+        <div class="badges">${badges.join("")}</div></div>
+      <div class="actions">
+        <label class="switch" title="Enabled"><input type="checkbox" data-action="toggle" data-id="${esc(a.id)}" ${a.enabled ? "checked" : ""}><span></span></label>
+        ${a.is_recurring ? `<button class="icon" title="${a.next_skipped ? "Reinstate next occurrence" : "Skip next occurrence"}" data-action="${a.next_skipped ? "unskip" : "skip"}" data-id="${esc(a.id)}">${icon(a.next_skipped ? "undo" : "skip")}</button>` : ""}
+        <button class="icon" title="Edit" data-action="edit" data-id="${esc(a.id)}">${icon("edit")}</button>
+        <button class="icon" title="Delete" data-action="delete" data-id="${esc(a.id)}">${icon("del")}</button>
+      </div></div></div>`;
+  }
+
   async _call(service, data, returnResponse = false) {
     this._error = "";
     try {
@@ -260,11 +273,11 @@ class VoiceAlarmsPanel extends HTMLElement {
   async _onClick(e) {
     const el = e.target.closest("[data-action]");
     if (!el || el.tagName === "INPUT") return;
-    const { action, id, target } = el.dataset;
+    const { action, id, target, kind } = el.dataset;
     const alarm = id && this._state.alarms.find((a) => a.id === id);
     switch (action) {
       case "add":
-        this._openEditor(null);
+        this._openEditor(null, kind || "alarm");
         break;
       case "edit":
         this._openEditor(alarm);
@@ -298,7 +311,7 @@ class VoiceAlarmsPanel extends HTMLElement {
     await this._call("update_alarm", { alarm_id: el.dataset.id, enabled: el.checked }).catch(() => {});
   }
 
-  _openEditor(alarm) {
+  _openEditor(alarm, newKind = "alarm") {
     const dialog = this.shadowRoot.getElementById("editor");
     const targets = this._state.targets;
     const today = new Date();
@@ -306,7 +319,7 @@ class VoiceAlarmsPanel extends HTMLElement {
     tomorrow.setDate(today.getDate() + 1);
     const toIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const a = alarm || {
-      kind: "alarm",
+      kind: newKind,
       name: "",
       message: "",
       time: "07:00",
@@ -319,7 +332,7 @@ class VoiceAlarmsPanel extends HTMLElement {
       is_recurring: false,
     };
     dialog.innerHTML = `<form method="dialog">
-      <h3>${alarm ? "Edit" : "New"} alarm</h3>
+      <h3 id="form-title"></h3>
       <div class="two">
         <label class="field">Type<select name="kind"><option value="alarm" ${a.kind === "alarm" ? "selected" : ""}>Alarm (rings)</option><option value="reminder" ${a.kind === "reminder" ? "selected" : ""}>Reminder (spoken)</option></select></label>
         <label class="field">Time<input type="time" name="time" required value="${esc(a.time)}"></label>
@@ -335,7 +348,7 @@ class VoiceAlarmsPanel extends HTMLElement {
       <div class="field" data-only="weekly"><span>Days</span><div class="days">${DAY_CODES.map(
         (c, i) => `<label><input type="checkbox" name="wd" value="${c}" ${a.weekdays.includes(i) ? "checked" : ""}>${DAY_SHORT[i]}</label>`
       ).join("")}</div></div>
-      <div class="two">
+      <div class="two" data-only="alarm">
         <label class="field">Ring duration (minutes, empty = default)<input type="number" name="duration" min="1" max="1440" value="${a.duration ? Math.round(a.duration / 60) : ""}"></label>
         <label class="field">Custom sound (URL / media-source id)<input type="text" name="sound" value="${esc(a.sound || "")}"></label>
       </div>
@@ -347,9 +360,10 @@ class VoiceAlarmsPanel extends HTMLElement {
     const sync = () => {
       const kind = form.kind.value;
       const repeat = form.repeat.value;
+      form.querySelector("#form-title").textContent = `${alarm ? "Edit" : "New"} ${kind}`;
       for (const el of form.querySelectorAll("[data-only]")) {
         const only = el.dataset.only;
-        el.style.display = only === "reminder" ? (kind === "reminder" ? "" : "none") : only === repeat ? "" : "none";
+        el.style.display = only === kind || only === repeat ? "" : "none";
       }
     };
     form.addEventListener("change", sync);
