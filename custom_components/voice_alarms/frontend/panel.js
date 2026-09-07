@@ -34,7 +34,7 @@ const STYLE = `
   h2 { font-size: 16px; font-weight: 500; margin: 20px 0 8px; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: .5px; }
   .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
   .time { font-size: 34px; font-weight: 300; line-height: 1; min-width: 96px; }
-  .grow { flex: 1; min-width: 160px; }
+  .grow { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
   .label { font-size: 16px; font-weight: 500; }
   .sub { color: var(--secondary-text-color); font-size: 14px; margin-top: 2px; }
   .message { font-size: 15px; font-style: italic; margin-top: 2px; }
@@ -44,7 +44,7 @@ const STYLE = `
   .badge.warn { background: var(--warning-color, #ffa600); color: #000; }
   .badge.err { background: var(--error-color, #db4437); color: #fff; }
   .badge.info { background: var(--primary-color); color: var(--text-primary-color, #fff); }
-  .actions { display: flex; gap: 4px; align-items: center; }
+  .actions { display: flex; gap: 4px; align-items: center; flex: none; }
   button { font: inherit; cursor: pointer; border: none; border-radius: 8px; padding: 8px 12px; background: var(--primary-color); color: var(--text-primary-color, #fff); display: inline-flex; align-items: center; gap: 6px; }
   button.icon { background: transparent; color: var(--secondary-text-color); padding: 6px; border-radius: 50%; }
   button.icon:hover { background: var(--secondary-background-color, #eee); color: var(--primary-text-color); }
