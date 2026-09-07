@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from array import array
 from pathlib import Path
@@ -11,7 +12,6 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.loader import async_get_integration
 from homeassistant.util.hass_dict import HassKey
 
 from .audio import build_default_loop, default_sound_wav
@@ -29,6 +29,7 @@ from .services import async_register_services, async_unregister_services
 from .websocket import async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
+FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 DATA_MANAGER: HassKey[AlarmManager] = HassKey(f"{DOMAIN}_manager")
 DATA_LOOP: HassKey[array] = HassKey(f"{DOMAIN}_loop")
@@ -48,6 +49,11 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
+def _panel_digest(path: Path) -> str:
+    """Short content hash of the panel script, used to cache-bust its module URL."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+
+
 async def _async_setup_shared(hass: HomeAssistant) -> None:
     """Register things that must only be registered once per HA run."""
     if hass.data.get(DATA_SHARED_READY):
@@ -61,9 +67,8 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
     hass.data[DATA_LOOP] = loop
     hass.data[DATA_DEFAULT_WAV] = default_sound_wav(loop)
 
-    frontend_dir = Path(__file__).parent / "frontend"
     await hass.http.async_register_static_paths(
-        [StaticPathConfig(PANEL_STATIC_URL, str(frontend_dir), cache_headers=False)]
+        [StaticPathConfig(PANEL_STATIC_URL, str(FRONTEND_DIR), cache_headers=False)]
     )
     async_register_websocket(hass, lambda: hass.data.get(DATA_MANAGER))
     hass.data[DATA_SHARED_READY] = True
@@ -80,14 +85,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: VoiceAlarmsConfigEntry) 
     async_register_intents(hass, manager)
     async_register_services(hass, manager)
 
-    integration = await async_get_integration(hass, DOMAIN)
+    # The static path sends no Cache-Control header, so browsers cache the module
+    # heuristically and keep an already imported module for the page's lifetime.
+    # Key the URL by content so every changed panel.js is fetched fresh.
+    digest = await hass.async_add_executor_job(_panel_digest, FRONTEND_DIR / "panel.js")
     await panel_custom.async_register_panel(
         hass,
         frontend_url_path=PANEL_URL_PATH,
         webcomponent_name="voice-alarms-panel",
         sidebar_title="Voice Alarms",
         sidebar_icon="mdi:alarm",
-        module_url=f"{PANEL_STATIC_URL}/panel.js?v={integration.version}",
+        module_url=f"{PANEL_STATIC_URL}/panel.js?v={digest}",
         require_admin=False,
         config={"domain": DOMAIN},
     )
