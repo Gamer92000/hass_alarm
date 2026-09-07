@@ -39,7 +39,7 @@ class StreamSpec:
     @property
     def url(self) -> str:
         """Relative URL of this stream."""
-        return f"{STREAM_URL_BASE}/{self.token}.wav"
+        return f"{STREAM_URL_BASE}/{self.token}.flac"
 
 
 class StreamRegistry:
@@ -69,7 +69,7 @@ class VoiceAlarmStreamView(HomeAssistantView):
     unguessable token that is valid only while the alarm segment is active.
     """
 
-    url = f"{STREAM_URL_BASE}/{{token}}.wav"
+    url = f"{STREAM_URL_BASE}/{{token}}.flac"
     name = f"api:{DOMAIN}:stream"
     requires_auth = False
 
@@ -77,7 +77,7 @@ class VoiceAlarmStreamView(HomeAssistantView):
         self._registry = registry
 
     async def get(self, request: web.Request, token: str) -> web.StreamResponse:
-        """Stream WAV audio."""
+        """Stream FLAC audio."""
         spec = self._registry.get(token)
         if spec is None:
             raise web.HTTPNotFound
@@ -101,7 +101,7 @@ class VoiceAlarmStreamView(HomeAssistantView):
         response = web.StreamResponse(
             status=200,
             headers={
-                "Content-Type": "audio/wav",
+                "Content-Type": "audio/flac",
                 "Cache-Control": "no-store",
                 "Accept-Ranges": "none",
             },

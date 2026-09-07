@@ -56,6 +56,8 @@ WEEKDAY_NAMES: Final = [
 
 # Audio
 SAMPLE_RATE: Final = 44100
+# Samples per FLAC frame of the streamed alarm audio.
+FLAC_BLOCK_SIZE: Final = 4096
 STREAM_CHUNK_SECONDS: Final = 0.25
 STREAM_LEAD_SECONDS: Final = 2.0
 # ESPHome waits at most 5 minutes for an announcement, so keep segments shorter.

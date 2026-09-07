@@ -90,9 +90,10 @@ the alarm. If you prefer "silence for a moment, then ring again unless dismissed
 ## How ringing works
 
 At alarm time the integration calls `assist_satellite.announce` with a URL to an audio
-stream it generates itself. The stream is a real-time paced WAV that loops the alarm sound
-for the configured duration with the volume ramp applied in the audio, so it works on every
-satellite type without depending on media-player volume control. Dismissing cuts the stream,
+stream it generates itself. The stream is a real-time paced FLAC stream (the format Voice PE
+decodes natively) that loops the alarm sound for the configured duration with the volume ramp
+applied in the audio, so it works on every satellite type without depending on media-player
+volume control. Dismissing cuts the stream,
 which stops playback within a couple of seconds. If the satellite has a media player
 (Voice PE does), the satellite volume can additionally be set to a fixed level while ringing
 and is restored afterwards.

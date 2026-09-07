@@ -37,7 +37,7 @@ def blocking_announce(hass: HomeAssistant, setup_integration) -> SimpleNamespace
     async def handler(call: ServiceCall) -> None:
         state.calls.append(call)
         media_id = call.data.get("media_id") or ""
-        match = re.search(r"/stream/([^/]+)\.wav", media_id)
+        match = re.search(r"/stream/([^/]+)\.flac", media_id)
         spec = hass.data[DATA_STREAMS].get(match.group(1)) if match else None
         if spec:
             spec.opened = True

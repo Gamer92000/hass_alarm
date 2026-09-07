@@ -1,11 +1,13 @@
-"""Render the built-in alarm sound to a WAV file so it can be auditioned.
+"""Render the built-in alarm sound so it can be auditioned.
 
-Usage: python tools/render_default_sound.py [output.wav] [--ramp]
+Usage: python tools/render_default_sound.py [output.wav]
+       python tools/render_default_sound.py output.flac --ramp
 
-With --ramp the file contains 40 seconds of the looped sound with the default
-volume ramp applied, exactly as a satellite would hear the start of an alarm.
-Only needs the ``homeassistant`` package importable (for one constant); the
-integration itself is not loaded.
+Without --ramp the file is one iteration of the loop as WAV (what the panel
+previews). With --ramp it is 40 seconds of the looped sound with the default
+volume ramp applied, as FLAC: byte for byte what a satellite receives at the
+start of an alarm. Only needs the ``homeassistant`` package importable (for
+one constant); the integration itself is not loaded.
 """
 
 from __future__ import annotations
@@ -36,7 +38,10 @@ def _load_audio_module() -> types.ModuleType:
 
 
 async def _ramped(audio: types.ModuleType) -> bytes:
-    audio.STREAM_LEAD_SECONDS = 10_000  # no real-time pacing for the export
+    async def no_wait(self: object, _position: float) -> None:
+        """No real-time pacing for the export."""
+
+    audio.Pacer.wait_for = no_wait
     loop = audio.build_default_loop()
     chunks = [
         chunk
@@ -48,10 +53,12 @@ async def _ramped(audio: types.ModuleType) -> bytes:
 
 
 def main() -> None:
+    ramp = "--ramp" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    out = Path(args[0]) if args else Path("voice_alarm_default.wav")
+    default = "voice_alarm_default_ramp.flac" if ramp else "voice_alarm_default.wav"
+    out = Path(args[0]) if args else Path(default)
     audio = _load_audio_module()
-    if "--ramp" in sys.argv:
+    if ramp:
         data = asyncio.run(_ramped(audio))
     else:
         data = audio.default_sound_wav(audio.build_default_loop())

@@ -27,7 +27,7 @@ def _device_that_stops(hass: HomeAssistant, client, chunks_before_stop: int) -> 
 
     async def announce(call: ServiceCall) -> None:
         state.calls += 1
-        match = re.search(r"(/api/voice_alarms/stream/[^/]+\.wav)", call.data["media_id"])
+        match = re.search(r"(/api/voice_alarms/stream/[^/]+\.flac)", call.data["media_id"])
         async with client.get(match.group(1)) as resp:
             count = 0
             async for _chunk in resp.content.iter_chunked(4096):

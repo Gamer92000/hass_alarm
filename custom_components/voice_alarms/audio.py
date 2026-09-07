@@ -7,10 +7,14 @@ Two sources exist:
 * A custom sound (URL, ``media-source://`` id or local file) which is looped
   and gain-ramped by ffmpeg.
 
-Both produce a WAV stream whose loudness ramps up over the first
-``ramp_seconds`` of the alarm. The stream is paced to real time so that the
-satellite never buffers more than a couple of seconds, which keeps dismissal
-snappy.
+Both produce a FLAC stream whose loudness ramps up over the first
+``ramp_seconds`` of the alarm. FLAC rather than WAV because satellites do not
+necessarily decode WAV at all: the stock Home Assistant Voice PE firmware only
+ships FLAC and MP3 decoders and rejects an ``audio/wav`` stream before playing
+anything. The built-in sound is wrapped into uncompressed FLAC frames right
+here (``FlacWriter``); custom sounds are encoded by ffmpeg. The stream is paced
+to real time so that the satellite never buffers more than a couple of
+seconds, which keeps dismissal snappy.
 """
 
 from __future__ import annotations
@@ -19,12 +23,13 @@ import asyncio
 import logging
 import math
 import struct
+import sys
 import time as time_mod
 from array import array
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
-from .const import SAMPLE_RATE, STREAM_CHUNK_SECONDS, STREAM_LEAD_SECONDS
+from .const import FLAC_BLOCK_SIZE, SAMPLE_RATE, STREAM_CHUNK_SECONDS, STREAM_LEAD_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +113,170 @@ def wav_header(num_samples: int, rate: int = SAMPLE_RATE, channels: int = 1) -> 
     )
 
 
+# -------------------------------------------------------------------- FLAC
+#
+# A FLAC stream is the ``fLaC`` marker, a STREAMINFO metadata block and then
+# frames. Every frame carries a small header (CRC-8 protected), one subframe
+# per channel and a CRC-16 over the whole frame. Using VERBATIM subframes
+# (raw samples, no prediction) needs no maths, costs the same bandwidth as
+# WAV and is something every FLAC decoder must support.
+
+FLAC_SAMPLE_BITS = 16
+_FLAC_BLOCK_SIZE_CODES = {
+    192: 0x1,
+    576: 0x2,
+    1152: 0x3,
+    2304: 0x4,
+    4608: 0x5,
+    256: 0x8,
+    512: 0x9,
+    1024: 0xA,
+    2048: 0xB,
+    4096: 0xC,
+    8192: 0xD,
+    16384: 0xE,
+    32768: 0xF,
+}
+_FLAC_SAMPLE_RATE_CODES = {
+    88200: 0x1,
+    176400: 0x2,
+    192000: 0x3,
+    8000: 0x4,
+    16000: 0x5,
+    22050: 0x6,
+    24000: 0x7,
+    32000: 0x8,
+    44100: 0x9,
+    48000: 0xA,
+    96000: 0xB,
+}
+
+
+def _crc_table(poly: int, width: int) -> list[int]:
+    top = 1 << (width - 1)
+    mask = (1 << width) - 1
+    table = []
+    for byte in range(256):
+        crc = byte << (width - 8)
+        for _ in range(8):
+            crc = ((crc << 1) ^ poly) if crc & top else (crc << 1)
+        table.append(crc & mask)
+    return table
+
+
+_CRC8_TABLE = _crc_table(0x07, 8)
+_CRC16_TABLE = _crc_table(0x8005, 16)
+
+
+def flac_crc8(data: bytes | bytearray) -> int:
+    """CRC-8 (polynomial 0x07, no init/xor) as used for FLAC frame headers."""
+    crc = 0
+    table = _CRC8_TABLE
+    for byte in data:
+        crc = table[crc ^ byte]
+    return crc
+
+
+def flac_crc16(data: bytes | bytearray) -> int:
+    """CRC-16 (polynomial 0x8005, no init/xor) as used for FLAC frames."""
+    crc = 0
+    table = _CRC16_TABLE
+    for byte in data:
+        crc = ((crc << 8) & 0xFFFF) ^ table[(crc >> 8) ^ byte]
+    return crc
+
+
+def flac_utf8_number(value: int) -> bytes:
+    """Encode a frame number the way FLAC frame headers do (UTF-8 style, up to 36 bits)."""
+    if value < 0:
+        raise ValueError("frame number must not be negative")
+    if value < 0x80:
+        return bytes((value,))
+    for extra in range(1, 7):
+        if value < 1 << (6 + 5 * extra):
+            break
+    else:
+        raise ValueError("frame number too large")
+    lead = ((0xFF << (7 - extra)) & 0xFF) | (value >> (6 * extra))
+    tail = [0x80 | ((value >> (6 * i)) & 0x3F) for i in range(extra - 1, -1, -1)]
+    return bytes([lead, *tail])
+
+
+class FlacWriter:
+    """Write a 16-bit FLAC stream frame by frame without compressing."""
+
+    def __init__(
+        self,
+        *,
+        rate: int = SAMPLE_RATE,
+        channels: int = 1,
+        total_samples: int = 0,
+        block_size: int = FLAC_BLOCK_SIZE,
+    ) -> None:
+        if not 1 <= channels <= 8:
+            raise ValueError("FLAC supports 1 to 8 channels")
+        if not 16 <= block_size <= 65535:
+            raise ValueError("FLAC block size must be 16..65535")
+        if not 0 < rate < 1 << 20:
+            raise ValueError("unsupported sample rate")
+        self.rate = rate
+        self.channels = channels
+        self.total_samples = total_samples  # 0 means unknown
+        self.block_size = block_size
+        self._frame_number = 0
+
+    def header(self) -> bytes:
+        """Return the ``fLaC`` marker followed by the STREAMINFO block."""
+        packed = (
+            (self.rate << 44)
+            | ((self.channels - 1) << 41)
+            | ((FLAC_SAMPLE_BITS - 1) << 36)
+            | (self.total_samples & ((1 << 36) - 1))
+        )
+        streaminfo = (
+            struct.pack(">HH", self.block_size, self.block_size)
+            + bytes(6)  # min / max frame size unknown
+            + packed.to_bytes(8, "big")
+            + bytes(16)  # MD5 of the decoded audio unknown
+        )
+        # 0x80: this is the last metadata block; block type 0 = STREAMINFO
+        return b"fLaC" + b"\x80" + len(streaminfo).to_bytes(3, "big") + streaminfo
+
+    def frame(self, samples: array) -> bytes:
+        """Encode one block of interleaved 16-bit samples as a VERBATIM frame.
+
+        Every block but the last must hold exactly ``block_size`` samples per
+        channel; the last one may be shorter.
+        """
+        count = len(samples) // self.channels
+        if not 1 <= count <= self.block_size or len(samples) != count * self.channels:
+            raise ValueError("bad block length")
+        header = bytearray((0xFF, 0xF8))  # sync code, fixed block size strategy
+        code = _FLAC_BLOCK_SIZE_CODES.get(count)
+        extra = b""
+        if code is None:
+            if count <= 256:
+                code, extra = 0x6, bytes((count - 1,))
+            else:
+                code, extra = 0x7, struct.pack(">H", count - 1)
+        header.append((code << 4) | _FLAC_SAMPLE_RATE_CODES.get(self.rate, 0))
+        header.append(((self.channels - 1) << 4) | (0b100 << 1))  # independent channels, 16 bit
+        header += flac_utf8_number(self._frame_number) + extra
+        header.append(flac_crc8(header))
+        self._frame_number += 1
+
+        parts = [bytes(header)]
+        for channel in range(self.channels):
+            block = samples[channel :: self.channels] if self.channels > 1 else samples
+            block = array("h", block.tobytes())
+            if sys.byteorder == "little":
+                block.byteswap()
+            # subframe header: VERBATIM, no wasted bits; then the raw samples
+            parts.append(b"\x02" + block.tobytes())
+        frame = b"".join(parts)
+        return frame + struct.pack(">H", flac_crc16(frame))
+
+
 def build_default_loop(rate: int = SAMPLE_RATE) -> array:
     """Render the built-in alarm sound: a 4 second bell arpeggio loop.
 
@@ -162,40 +331,45 @@ async def stream_builtin(
     stop: asyncio.Event,
     rate: int = SAMPLE_RATE,
 ) -> AsyncIterator[bytes]:
-    """Stream the built-in loop as WAV for ``duration`` seconds.
+    """Stream the built-in loop as FLAC for ``duration`` seconds.
 
     ``offset`` is how many seconds of the alarm already elapsed before this
     stream started; it keeps the ramp continuous across segments.
     """
     total_samples = int(duration * rate)
-    yield wav_header(total_samples, rate)
+    writer = FlacWriter(rate=rate, channels=1, total_samples=total_samples)
+    yield writer.header()
 
-    chunk = int(STREAM_CHUNK_SECONDS * rate)
+    block = writer.block_size
+    blocks_per_chunk = max(1, round(STREAM_CHUNK_SECONDS * rate / block))
     loop_len = len(loop)
     loop_pos = int(offset * rate) % loop_len
     produced = 0
     pacer = Pacer()
 
     while produced < total_samples and not stop.is_set():
-        count = min(chunk, total_samples - produced)
-        t0 = offset + produced / rate
-        t1 = offset + (produced + count) / rate
-        g0 = ramp.gain(t0)
-        g1 = ramp.gain(t1)
-        # Gather samples (wrapping around the loop)
-        if loop_pos + count <= loop_len:
-            raw = loop[loop_pos : loop_pos + count]
-        else:
-            raw = loop[loop_pos:] + loop[: (loop_pos + count) - loop_len]
-        loop_pos = (loop_pos + count) % loop_len
-        if g0 >= 1.0 and g1 >= 1.0:
-            data = raw.tobytes()
-        else:
-            step = (g1 - g0) / count
-            data = array("h", [int(s * (g0 + step * i)) for i, s in enumerate(raw)]).tobytes()
-        produced += count
+        frames = []
+        for _ in range(blocks_per_chunk):
+            count = min(block, total_samples - produced)
+            if count <= 0:
+                break
+            t0 = offset + produced / rate
+            t1 = offset + (produced + count) / rate
+            g0 = ramp.gain(t0)
+            g1 = ramp.gain(t1)
+            # Gather samples (wrapping around the loop)
+            if loop_pos + count <= loop_len:
+                raw = loop[loop_pos : loop_pos + count]
+            else:
+                raw = loop[loop_pos:] + loop[: (loop_pos + count) - loop_len]
+            loop_pos = (loop_pos + count) % loop_len
+            if g0 < 1.0 or g1 < 1.0:
+                step = (g1 - g0) / count
+                raw = array("h", [int(s * (g0 + step * i)) for i, s in enumerate(raw)])
+            frames.append(writer.frame(raw))
+            produced += count
         await pacer.wait_for(produced / rate)
-        yield data
+        yield b"".join(frames)
 
 
 async def stream_ffmpeg(
@@ -209,7 +383,7 @@ async def stream_ffmpeg(
     rate: int = SAMPLE_RATE,
     on_started: Callable[[], None] | None = None,
 ) -> AsyncIterator[bytes]:
-    """Loop ``source`` through ffmpeg with a gain ramp, streaming WAV bytes."""
+    """Loop ``source`` through ffmpeg with a gain ramp, streaming FLAC bytes."""
     cmd = [
         binary,
         "-hide_banner",
@@ -229,8 +403,12 @@ async def stream_ffmpeg(
         "1",
         "-ar",
         str(rate),
+        "-sample_fmt",
+        "s16",
         "-f",
-        "wav",
+        "flac",
+        "-flush_packets",
+        "1",
         "pipe:1",
     ]
     _LOGGER.debug("Starting ffmpeg: %s", " ".join(cmd))

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import struct
-from array import array
 from types import SimpleNamespace
 
 import pytest
@@ -25,18 +23,19 @@ from homeassistant.components.assist_satellite import DOMAIN as SAT_DOMAIN
 from homeassistant.core import Context, HomeAssistant, ServiceCall
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import llm
+from tests.flac_util import parse_flac
 
 
 async def test_stream_end_to_end(
     hass: HomeAssistant, satellites, manager, hass_client_no_auth: ClientSessionGenerator
 ) -> None:
-    """The satellite fetches a paced, ramped WAV stream that ends when dismissed."""
+    """The satellite fetches a paced, ramped FLAC stream that ends when dismissed."""
     client = await hass_client_no_auth()
     state = SimpleNamespace(body=b"", status=None, calls=0)
 
     async def announce(call: ServiceCall) -> None:
         state.calls += 1
-        match = re.search(r"(/api/voice_alarms/stream/[^/]+\.wav)", call.data["media_id"])
+        match = re.search(r"(/api/voice_alarms/stream/[^/]+\.flac)", call.data["media_id"])
         assert match
         async with client.get(match.group(1)) as resp:
             state.status = resp.status
@@ -50,13 +49,11 @@ async def test_stream_end_to_end(
 
     assert state.calls == 1
     assert state.status == 200
-    header, data = state.body[:44], state.body[44:]
-    assert header[:4] == b"RIFF" and header[8:12] == b"WAVE"
-    channels, rate = struct.unpack("<HI", header[22:28])
-    assert (channels, rate) == (1, SAMPLE_RATE)
-    assert struct.unpack("<I", header[40:44])[0] == 3 * SAMPLE_RATE * 2
-    assert len(data) == 3 * SAMPLE_RATE * 2
-    samples = array("h", data)
+    stream = parse_flac(state.body)  # strict: every header field and both CRCs
+    assert (stream.channels, stream.rate, stream.bits) == (1, SAMPLE_RATE, 16)
+    assert stream.total_samples == 3 * SAMPLE_RATE
+    samples = stream.samples
+    assert len(samples) == 3 * SAMPLE_RATE
     first = max(abs(s) for s in samples[: SAMPLE_RATE // 2])
     last = max(abs(s) for s in samples[-SAMPLE_RATE // 2 :])
     assert first < last  # volume ramps up
@@ -75,7 +72,7 @@ async def test_stream_stops_on_dismiss(
     started = asyncio.Event()
 
     async def announce(call: ServiceCall) -> None:
-        match = re.search(r"(/api/voice_alarms/stream/[^/]+\.wav)", call.data["media_id"])
+        match = re.search(r"(/api/voice_alarms/stream/[^/]+\.flac)", call.data["media_id"])
         async with client.get(match.group(1)) as resp:
             async for chunk in resp.content.iter_chunked(4096):
                 got.bytes += len(chunk)
@@ -98,7 +95,7 @@ async def test_default_sound_endpoint(hass: HomeAssistant, manager, hass_client_
     body = await resp.read()
     assert body[:4] == b"RIFF"
     assert len(body) == 44 + 4 * SAMPLE_RATE * 2
-    resp = await client.get("/api/voice_alarms/stream/unknown.wav")
+    resp = await client.get("/api/voice_alarms/stream/unknown.flac")
     assert resp.status == 404
 
 
