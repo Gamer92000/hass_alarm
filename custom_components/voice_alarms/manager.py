@@ -19,13 +19,14 @@ from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .audio import RampSpec
+from .audio import Curve, RampSpec
 from .const import (
     CONF_ALARM_VOLUME,
     CONF_DEFAULT_DURATION,
     CONF_DEFAULT_SOUND,
     CONF_DEVICE_STOP_PAUSE,
     CONF_MISSED_GRACE,
+    CONF_RAMP_CURVE,
     CONF_RAMP_SECONDS,
     CONF_RAMP_START,
     CONF_REMINDER_INTERVAL,
@@ -33,6 +34,7 @@ from .const import (
     DEFAULT_DEVICE_STOP_PAUSE,
     DEFAULT_DURATION,
     DEFAULT_MISSED_GRACE,
+    DEFAULT_RAMP_CURVE,
     DEFAULT_RAMP_SECONDS,
     DEFAULT_RAMP_START,
     DEFAULT_REMINDER_INTERVAL,
@@ -40,6 +42,7 @@ from .const import (
     KIND_ALARM,
     KIND_REMINDER,
     SIGNAL_ALARMS_UPDATED,
+    SIGNAL_CONFIG_UPDATED,
     SIGNAL_RINGING_UPDATED,
     SIGNAL_TARGETS_UPDATED,
     STORAGE_KEY,
@@ -100,7 +103,25 @@ class AlarmManager:
         return RampSpec(
             start=max(0.0, min(1.0, float(self._opt(CONF_RAMP_START, DEFAULT_RAMP_START)) / 100)),
             seconds=float(self._opt(CONF_RAMP_SECONDS, DEFAULT_RAMP_SECONDS)),
+            curve=_ramp_curve(self.entry.options.get(CONF_RAMP_CURVE)),
         )
+
+    @callback
+    def async_set_ramp(self, *, seconds: float, start: float, curve: Curve) -> None:
+        """Store new ramp settings from the panel.
+
+        Written straight into the entry options (``start`` as percent, like
+        the options flow stores it) without reloading the entry, so a ringing
+        alarm is not interrupted; the next ring picks the new ramp up.
+        """
+        options = {
+            **self.entry.options,
+            CONF_RAMP_SECONDS: round(seconds, 3),
+            CONF_RAMP_START: round(start * 100, 2),
+            CONF_RAMP_CURVE: [round(v, 4) for v in curve],
+        }
+        self.hass.config_entries.async_update_entry(self.entry, options=options)
+        async_dispatcher_send(self.hass, SIGNAL_CONFIG_UPDATED)
 
     @property
     def alarm_volume(self) -> float | None:
@@ -127,6 +148,7 @@ class AlarmManager:
             "default_duration": self.default_duration,
             "ramp_seconds": self.ramp.seconds,
             "ramp_start": self.ramp.start,
+            "ramp_curve": list(self.ramp.curve),
             "alarm_volume": self.alarm_volume,
             "default_sound": self.default_sound,
             "reminder_repeats": int(self._opt(CONF_REMINDER_REPEATS, DEFAULT_REMINDER_REPEATS)),
@@ -641,6 +663,15 @@ class AlarmManager:
             "config": self.config_dict(),
             "now": now.isoformat(),
         }
+
+
+def _ramp_curve(value: Any) -> Curve:
+    """Parse the stored ramp curve, falling back to the default when malformed."""
+    try:
+        x1, y1, x2, y2 = (max(0.0, min(1.0, float(v))) for v in value)
+    except (TypeError, ValueError):
+        return DEFAULT_RAMP_CURVE
+    return (x1, y1, x2, y2)
 
 
 @callback

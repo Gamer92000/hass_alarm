@@ -96,7 +96,8 @@ At alarm time the integration calls `assist_satellite.announce` with a URL to an
 stream it generates itself. The stream is a real-time paced FLAC stream (the format Voice PE
 decodes natively) that loops the alarm sound for the configured duration with the volume ramp
 applied in the audio, so it works on every satellite type without depending on media-player
-volume control. Dismissing cuts the stream,
+volume control. The ramp follows a cubic bezier easing curve, so it starts and ends gently
+instead of kinking; ffmpeg gets it as a piecewise-linear `volume` expression. Dismissing cuts the stream,
 which stops playback within a couple of seconds. If the satellite has a media player
 (Voice PE does), the satellite volume can additionally be set to a fixed level while ringing
 and is restored afterwards.
@@ -108,6 +109,7 @@ and is restored afterwards.
 | Ring duration | 300 s | How long an alarm rings before it stops by itself. Can be overridden per alarm. |
 | Volume ramp-up time | 30 s | Time to reach full loudness. |
 | Start level of the ramp | 10 % | Loudness at the beginning of the ramp. |
+| Ramp curve | ease in-out | Shape of the ramp as a cubic bezier easing (like CSS `cubic-bezier`). Edited graphically in the panel: *Settings → Edit ramp*, with drag handles, presets and an audible preview. |
 | Satellite volume while ringing | *(empty)* | If set, the satellite media player is set to this volume during the alarm and restored afterwards. |
 | Alarm sound | built-in | URL, `/local/...` path or `media-source://media_source/local/file.mp3`. Can be overridden per alarm. |
 | Reminder repeats / pause | 3 × 60 s | How often and how spaced a reminder is spoken. |

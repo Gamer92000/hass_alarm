@@ -27,6 +27,7 @@ from .const import (
     CONF_DEFAULT_SOUND,
     CONF_DEVICE_STOP_PAUSE,
     CONF_MISSED_GRACE,
+    CONF_RAMP_CURVE,
     CONF_RAMP_SECONDS,
     CONF_RAMP_START,
     CONF_REMINDER_INTERVAL,
@@ -50,6 +51,10 @@ def _number(
         config["unit_of_measurement"] = unit
     return NumberSelector(config)
 
+
+# Options without a form field: they are edited in the panel and must survive
+# a save of this form, which otherwise replaces all options.
+PANEL_OPTIONS = (CONF_RAMP_CURVE,)
 
 OPTIONS_SCHEMA = vol.Schema(
     {
@@ -122,7 +127,9 @@ class VoiceAlarmsOptionsFlow(OptionsFlowWithReload):
         if user_input is not None:
             errors = _validate(user_input)
             if not errors:
-                return self.async_create_entry(data=user_input)
+                options = self.config_entry.options
+                kept = {key: options[key] for key in PANEL_OPTIONS if key in options}
+                return self.async_create_entry(data={**kept, **user_input})
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(

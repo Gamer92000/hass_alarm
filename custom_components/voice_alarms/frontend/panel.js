@@ -21,6 +21,125 @@ const ICONS = {
 const DAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+// Volume ramp: the gain rises from the start level to 100% over ramp_seconds along
+// a CSS style cubic-bezier(x1, y1, x2, y2) easing (same maths as audio.py).
+const RAMP_PRESETS = [
+  ["Linear", [0, 0, 1, 1]],
+  ["Ease in", [0.42, 0, 1, 1]],
+  ["Ease out", [0, 0, 0.58, 1]],
+  ["Ease in-out", [0.42, 0, 0.58, 1]],
+];
+const DEFAULT_RAMP_CURVE = RAMP_PRESETS[3][1];
+// Ramp graph geometry in SVG user units: the plot area sits inside the paddings.
+const G = { w: 400, h: 190, left: 44, right: 14, top: 16, bottom: 26 };
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const graphX = (x) => G.left + x * (G.w - G.left - G.right);
+const graphY = (gain) => G.top + (1 - gain) * (G.h - G.top - G.bottom);
+
+function bezierAt(u, a, b) {
+  const v = 1 - u;
+  return 3 * v * v * u * a + 3 * v * u * u * b + u * u * u;
+}
+
+function bezierEase(x, [x1, y1, x2, y2]) {
+  if (x <= 0) return 0;
+  if (x >= 1) return 1;
+  let u = x;
+  for (let i = 0; i < 8; i++) {
+    const error = bezierAt(u, x1, x2) - x;
+    if (Math.abs(error) < 1e-9) break;
+    const v = 1 - u;
+    const slope = 3 * v * v * x1 + 6 * v * u * (x2 - x1) + 3 * u * u * (1 - x2);
+    if (slope < 1e-6) break;
+    u -= error / slope;
+  }
+  if (!(u >= 0 && u <= 1) || Math.abs(bezierAt(u, x1, x2) - x) > 1e-9) {
+    let low = 0;
+    let high = 1;
+    for (let i = 0; i < 50; i++) {
+      u = (low + high) / 2;
+      if (bezierAt(u, x1, x2) < x) low = u;
+      else high = u;
+    }
+  }
+  return bezierAt(u, y1, y2);
+}
+
+function rampGain(ramp, t) {
+  if (ramp.seconds <= 0 || t >= ramp.seconds) return 1;
+  if (t <= 0) return ramp.start;
+  return clamp(ramp.start + (1 - ramp.start) * bezierEase(t / ramp.seconds, ramp.curve), 0, 1);
+}
+
+function rampFromConfig(config) {
+  return {
+    seconds: Number(config.ramp_seconds) || 0,
+    start: clamp(Number(config.ramp_start) || 0, 0, 1),
+    curve: [...(config.ramp_curve || DEFAULT_RAMP_CURVE)],
+  };
+}
+
+function presetName(curve) {
+  const hit = RAMP_PRESETS.find(([, c]) => c.every((v, i) => Math.abs(v - curve[i]) < 0.005));
+  return hit ? hit[0] : "";
+}
+
+function formatSeconds(s) {
+  return `${Math.round(s * 10) / 10} s`;
+}
+
+function rampSummary(ramp) {
+  if (ramp.seconds <= 0) return "No ramp: full volume from the start";
+  const name = presetName(ramp.curve);
+  return `From ${Math.round(ramp.start * 100)}% to 100% over ${formatSeconds(ramp.seconds)} · ${name ? name.toLowerCase() : "custom"} curve`;
+}
+
+function rampPoints(ramp) {
+  const s = ramp.start;
+  const [x1, y1, x2, y2] = ramp.curve;
+  return {
+    p0: [graphX(0), graphY(s)],
+    p1: [graphX(x1), graphY(s + (1 - s) * y1)],
+    p2: [graphX(x2), graphY(s + (1 - s) * y2)],
+    p3: [graphX(1), graphY(1)],
+  };
+}
+
+function curvePath(ramp) {
+  const { p0, p1, p2, p3 } = rampPoints(ramp);
+  if (ramp.seconds <= 0) return `M${p0[0]},${p3[1]} L${p3[0]},${p3[1]}`;
+  return `M${p0[0]},${p0[1]} C${p1[0]},${p1[1]} ${p2[0]},${p2[1]} ${p3[0]},${p3[1]}`;
+}
+
+function rampSvg(ramp, editable) {
+  const x0 = graphX(0);
+  const x1 = graphX(1);
+  const y0 = graphY(0);
+  const grid = [0.25, 0.5, 0.75, 1]
+    .map((g) => `<line class="grid" x1="${x0}" x2="${x1}" y1="${graphY(g)}" y2="${graphY(g)}"/>`)
+    .join("");
+  const ticks = [0, 0.25, 0.5, 0.75, 1]
+    .map(
+      (x) =>
+        `<line class="grid" x1="${graphX(x)}" x2="${graphX(x)}" y1="${y0}" y2="${y0 + 4}"/><text x="${graphX(x)}" y="${G.h - 8}" text-anchor="middle" data-tick="${x}">${formatSeconds(x * ramp.seconds)}</text>`
+    )
+    .join("");
+  const labels = [0, 1].map((g) => `<text x="${x0 - 6}" y="${graphY(g) + 4}" text-anchor="end">${g * 100}%</text>`).join("");
+  const path = curvePath(ramp);
+  const handles = editable
+    ? `<line class="arm" data-arm="p1"/><line class="arm" data-arm="p2"/>
+      <text class="start-label" x="${x0 + 6}" data-start-label></text>
+      <rect class="handle start" width="12" height="12" rx="2" data-handle="p0" data-ox="-17" data-oy="-6"/>
+      <circle class="handle" r="8" data-handle="p1"/><circle class="hit" r="18" data-handle="p1"/>
+      <circle class="handle" r="8" data-handle="p2"/><circle class="hit" r="18" data-handle="p2"/>
+      <rect class="hit start" width="40" height="36" data-handle="p0" data-ox="-42" data-oy="-18"/>
+      <line class="playhead" y1="${graphY(1)}" y2="${y0}" style="display:none"/>`
+    : "";
+  return `<svg class="graph${ramp.seconds <= 0 ? " flat" : ""}" viewBox="0 0 ${G.w} ${G.h}" aria-label="Volume ramp">
+    <line class="axis" x1="${x0}" x2="${x1}" y1="${y0}" y2="${y0}"/><line class="axis" x1="${x0}" x2="${x0}" y1="${graphY(1)}" y2="${y0}"/>
+    ${grid}${ticks}${labels}<path class="fill" d="${path} L${x1},${y0} L${x0},${y0} Z"/><path class="curve" d="${path}"/>${handles}</svg>`;
+}
+
 const STYLE = `
   :host { display: block; height: 100%; overflow: auto; color: var(--primary-text-color); background: var(--primary-background-color); }
   * { box-sizing: border-box; }
@@ -78,6 +197,27 @@ const STYLE = `
   .note { color: var(--secondary-text-color); font-size: 13px; }
   audio { width: 100%; margin-top: 8px; }
   .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .graph { display: block; width: 100%; height: auto; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .ramp-preview { margin: 8px 0 12px; }
+  .ramp-preview .graph { max-width: 380px; }
+  .graph .axis { stroke: var(--secondary-text-color); stroke-width: 1; }
+  .graph .grid { stroke: var(--divider-color, #ddd); stroke-width: 1; }
+  .graph .fill { fill: var(--primary-color); opacity: .12; }
+  .graph .curve { fill: none; stroke: var(--primary-color); stroke-width: 3; stroke-linecap: round; }
+  .graph .arm { stroke: var(--secondary-text-color); stroke-width: 1.5; stroke-dasharray: 4 3; }
+  .graph .handle { fill: var(--card-background-color, #fff); stroke: var(--primary-color); stroke-width: 3; }
+  .graph .handle.start { fill: var(--secondary-text-color); stroke: none; }
+  .graph .hit { fill: transparent; pointer-events: all; cursor: grab; }
+  .graph .hit:active { cursor: grabbing; }
+  .graph .hit.start { cursor: ns-resize; }
+  .graph.flat .hit, .graph.flat .handle, .graph.flat .arm, .graph.flat .start-label { display: none; }
+  .graph text { font-size: 11px; fill: var(--secondary-text-color); }
+  .graph .start-label { font-weight: 500; fill: var(--primary-text-color); }
+  .graph .playhead { stroke: var(--error-color, #db4437); stroke-width: 2; }
+  .presets { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .presets button { background: transparent; color: var(--primary-color); border: 1px solid var(--primary-color); padding: 5px 10px; border-radius: 16px; font-size: 13px; }
+  .presets button.active { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+  #ramp { width: min(600px, calc(100vw - 32px)); }
   @media (max-width: 600px) { .time { font-size: 28px; min-width: 80px; } .two { grid-template-columns: 1fr; } }
 `;
 
@@ -128,7 +268,7 @@ class VoiceAlarmsPanel extends HTMLElement {
     this._error = "";
     this._unsub = null;
     this._editing = null;
-    this.shadowRoot.innerHTML = `<style>${STYLE}</style><div id="app"></div><dialog id="editor"></dialog>`;
+    this.shadowRoot.innerHTML = `<style>${STYLE}</style><div id="app"></div><dialog id="editor"></dialog><dialog id="ramp"></dialog>`;
     this.shadowRoot.getElementById("app").addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.getElementById("app").addEventListener("change", (e) => this._onChange(e));
   }
@@ -225,8 +365,14 @@ class VoiceAlarmsPanel extends HTMLElement {
         <div class="sub">${next ? "Next: " + esc(next.label) + " " + esc(formatNext(next.next, now, this._locale)) : "No upcoming alarm"}</div></div>
         <div class="actions">${ringing ? `<button class="danger" data-action="dismiss" data-target="${esc(t.entity_id)}">${icon("stop")} Dismiss</button>` : `<button class="ghost" data-action="test" data-target="${esc(t.entity_id)}">${icon("play")} Test</button>`}</div></div>`);
     }
-    parts.push(`</div><h2>Settings</h2><div class="card"><div class="note">
-      Ring duration ${st.config.default_duration}s · volume ramps from ${Math.round(st.config.ramp_start * 100)}% over ${st.config.ramp_seconds}s ·
+    const ramp = rampFromConfig(st.config);
+    const admin = !!this._hass?.user?.is_admin;
+    parts.push(`</div><h2>Settings</h2><div class="card">
+      <div class="row"><div class="grow"><div class="label">Volume ramp</div><div class="sub">${esc(rampSummary(ramp))}</div></div>
+        ${admin ? `<div class="actions"><button class="ghost" data-action="ramp">${icon("edit")} Edit ramp</button></div>` : ""}</div>
+      <div class="ramp-preview">${rampSvg(ramp, false)}</div>
+      <div class="note">
+      Ring duration ${st.config.default_duration}s ·
       ${st.config.alarm_volume != null ? "satellite volume " + Math.round(st.config.alarm_volume * 100) + "%" : "satellite volume unchanged"} ·
       sound: ${st.config.default_sound ? esc(st.config.default_sound) : "built-in"}${st.config.default_sound && !st.config.ffmpeg ? " (ffmpeg missing: no ramp)" : ""}.
       Change these under Settings → Devices &amp; services → Voice Alarms → Configure.</div>
@@ -300,6 +446,9 @@ class VoiceAlarmsPanel extends HTMLElement {
       case "test":
         await this._call("test_alarm", { target, duration: 20 }).catch(() => {});
         break;
+      case "ramp":
+        this._openRampEditor();
+        break;
       default:
         break;
     }
@@ -309,6 +458,198 @@ class VoiceAlarmsPanel extends HTMLElement {
     const el = e.target;
     if (el.dataset.action !== "toggle") return;
     await this._call("update_alarm", { alarm_id: el.dataset.id, enabled: el.checked }).catch(() => {});
+  }
+
+  _openRampEditor() {
+    const dialog = this.shadowRoot.getElementById("ramp");
+    const ramp = rampFromConfig(this._state.config);
+    dialog.innerHTML = `<form method="dialog">
+      <h3>Volume ramp</h3>
+      <div class="note">Drag the round handles to shape the curve and the knob on the left axis to set the start level. The ramp is baked into the alarm audio, so it works on every satellite.</div>
+      ${rampSvg(ramp, true)}
+      <div class="presets">${RAMP_PRESETS.map(([name]) => `<button type="button" data-preset="${esc(name)}">${esc(name)}</button>`).join("")}<span class="note" id="ramp-curve"></span></div>
+      <div class="two">
+        <label class="field">Ramp-up time (seconds)<input type="number" name="seconds" min="0" max="300" step="1" value="${ramp.seconds}"></label>
+        <label class="field">Start level (%)<input type="number" name="start" min="0" max="100" step="1" value="${Math.round(ramp.start * 100)}"></label>
+      </div>
+      <div class="row"><button type="button" class="ghost" id="ramp-play">${icon("play")} Preview with the built-in sound</button><span class="note" id="ramp-time"></span></div>
+      <div class="error" id="ramp-error"></div>
+      <div class="buttons"><button type="button" class="ghost" data-close>Cancel</button><button type="submit">Save</button></div>
+    </form>`;
+    const form = dialog.querySelector("form");
+    const svg = dialog.querySelector("svg");
+    const curveInfo = dialog.querySelector("#ramp-curve");
+    const timeInfo = dialog.querySelector("#ramp-time");
+    const errorEl = dialog.querySelector("#ramp-error");
+    const playButton = dialog.querySelector("#ramp-play");
+    const playhead = svg.querySelector(".playhead");
+    const startLabel = svg.querySelector("[data-start-label]");
+
+    const place = (el, [x, y]) => {
+      if (el.tagName === "rect") {
+        el.setAttribute("x", x + Number(el.dataset.ox));
+        el.setAttribute("y", y + Number(el.dataset.oy));
+      } else {
+        el.setAttribute("cx", x);
+        el.setAttribute("cy", y);
+      }
+    };
+    const update = () => {
+      const path = curvePath(ramp);
+      const pts = rampPoints(ramp);
+      svg.querySelector(".curve").setAttribute("d", path);
+      svg.querySelector(".fill").setAttribute("d", `${path} L${graphX(1)},${graphY(0)} L${graphX(0)},${graphY(0)} Z`);
+      for (const el of svg.querySelectorAll("[data-handle]")) place(el, pts[el.dataset.handle]);
+      for (const el of svg.querySelectorAll("[data-arm]")) {
+        const [from, to] = el.dataset.arm === "p1" ? [pts.p0, pts.p1] : [pts.p3, pts.p2];
+        el.setAttribute("x1", from[0]);
+        el.setAttribute("y1", from[1]);
+        el.setAttribute("x2", to[0]);
+        el.setAttribute("y2", to[1]);
+      }
+      for (const el of svg.querySelectorAll("[data-tick]")) el.textContent = formatSeconds(Number(el.dataset.tick) * ramp.seconds);
+      startLabel.setAttribute("y", pts.p0[1] - 8);
+      startLabel.textContent = `${Math.round(ramp.start * 100)}%`;
+      startLabel.style.display = ramp.start > 0.9 ? "none" : "";
+      svg.classList.toggle("flat", ramp.seconds <= 0);
+      const name = presetName(ramp.curve);
+      for (const b of dialog.querySelectorAll("[data-preset]")) b.classList.toggle("active", b.dataset.preset === name);
+      curveInfo.textContent =
+        ramp.seconds <= 0
+          ? "No ramp: full volume from the start"
+          : `cubic-bezier(${ramp.curve.map((v) => Math.round(v * 100) / 100).join(", ")})${name ? "" : " · custom"}`;
+    };
+    update();
+
+    // Dragging: pointer position in SVG units, mapped to time fraction (x) and gain (y).
+    let dragging = null;
+    svg.addEventListener("pointerdown", (e) => {
+      const el = e.target.closest("[data-handle]");
+      if (!el || ramp.seconds <= 0) return;
+      dragging = el.dataset.handle;
+      svg.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    svg.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+      const x = clamp((pt.x - G.left) / (G.w - G.left - G.right), 0, 1);
+      const gain = clamp(1 - (pt.y - G.top) / (G.h - G.top - G.bottom), 0, 1);
+      if (dragging === "p0") {
+        ramp.start = Math.round(gain * 100) / 100;
+        form.start.value = Math.round(ramp.start * 100);
+      } else {
+        const y = ramp.start >= 1 ? 1 : clamp((gain - ramp.start) / (1 - ramp.start), 0, 1);
+        const i = dragging === "p1" ? 0 : 2;
+        ramp.curve[i] = Math.round(x * 100) / 100;
+        ramp.curve[i + 1] = Math.round(y * 100) / 100;
+      }
+      update();
+    });
+    const endDrag = () => {
+      dragging = null;
+    };
+    svg.addEventListener("pointerup", endDrag);
+    svg.addEventListener("pointercancel", endDrag);
+
+    dialog.querySelector(".presets").addEventListener("click", (e) => {
+      const button = e.target.closest("[data-preset]");
+      if (!button) return;
+      ramp.curve = [...RAMP_PRESETS.find(([name]) => name === button.dataset.preset)[1]];
+      update();
+    });
+    form.addEventListener("input", (e) => {
+      if (e.target.name === "seconds") ramp.seconds = clamp(Number(e.target.value) || 0, 0, 300);
+      else if (e.target.name === "start") ramp.start = clamp((Number(e.target.value) || 0) / 100, 0, 1);
+      else return;
+      update();
+    });
+
+    // Preview: the built-in loop through a Web Audio gain node that follows the ramp.
+    let preview = null;
+    const stopPreview = () => {
+      if (!preview) return;
+      cancelAnimationFrame(preview.frame);
+      try {
+        preview.source.stop();
+      } catch (err) {
+        // already stopped
+      }
+      preview.context.close();
+      preview = null;
+      playhead.style.display = "none";
+      timeInfo.textContent = "";
+      playButton.innerHTML = `${icon("play")} Preview with the built-in sound`;
+    };
+    const startPreview = async () => {
+      const Context = window.AudioContext || window.webkitAudioContext;
+      if (!Context) {
+        errorEl.textContent = "This browser has no Web Audio support.";
+        return;
+      }
+      errorEl.textContent = "";
+      playButton.disabled = true;
+      const context = new Context();
+      try {
+        const resp = await fetch("/api/voice_alarms/sound/default.wav");
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const buffer = await context.decodeAudioData(await resp.arrayBuffer());
+        const snapshot = { seconds: ramp.seconds, start: ramp.start, curve: [...ramp.curve] };
+        const source = context.createBufferSource();
+        source.buffer = buffer;
+        source.loop = true;
+        const gain = context.createGain();
+        const t0 = context.currentTime + 0.1;
+        if (snapshot.seconds > 0) {
+          const steps = 512;
+          const values = new Float32Array(steps);
+          for (let i = 0; i < steps; i++) values[i] = rampGain(snapshot, (i / (steps - 1)) * snapshot.seconds);
+          gain.gain.value = snapshot.start;
+          gain.gain.setValueCurveAtTime(values, t0, snapshot.seconds);
+        } else {
+          gain.gain.value = 1;
+        }
+        source.connect(gain);
+        gain.connect(context.destination);
+        source.start(t0);
+        preview = { context, source, frame: 0 };
+        const total = snapshot.seconds + 3;
+        const tick = () => {
+          if (!preview) return;
+          const t = context.currentTime - t0;
+          if (t >= total) {
+            stopPreview();
+            return;
+          }
+          const x = graphX(snapshot.seconds > 0 ? clamp(t / snapshot.seconds, 0, 1) : 1);
+          playhead.setAttribute("x1", x);
+          playhead.setAttribute("x2", x);
+          playhead.style.display = "";
+          timeInfo.textContent = `${Math.max(0, t).toFixed(1)} s · ${Math.round(rampGain(snapshot, t) * 100)}%`;
+          preview.frame = requestAnimationFrame(tick);
+        };
+        tick();
+        playButton.innerHTML = `${icon("stop")} Stop`;
+      } catch (err) {
+        errorEl.textContent = `Preview failed: ${err?.message || err}`;
+        context.close();
+      }
+      playButton.disabled = false;
+    };
+    playButton.addEventListener("click", () => (preview ? stopPreview() : startPreview()));
+
+    dialog.querySelector("[data-close]").addEventListener("click", () => dialog.close());
+    dialog.addEventListener("close", stopPreview, { once: true });
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      try {
+        await this._hass.callWS({ type: "voice_alarms/set_ramp", seconds: ramp.seconds, start: ramp.start, curve: ramp.curve });
+        dialog.close();
+      } catch (err) {
+        errorEl.textContent = err?.message || String(err);
+      }
+    });
+    dialog.showModal();
   }
 
   _openEditor(alarm, newKind = "alarm") {

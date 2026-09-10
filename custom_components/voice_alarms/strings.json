@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Voice Alarms",
-        "description": "Alarms and reminders for your voice satellites. All settings can be changed later.",
+        "description": "Alarms and reminders for your voice satellites. All settings can be changed later; the shape of the volume ramp is edited in the Voice Alarms panel.",
         "data": {
           "default_duration": "Ring duration",
           "ramp_seconds": "Volume ramp-up time",
@@ -29,6 +29,7 @@
     "step": {
       "init": {
         "title": "Voice Alarms settings",
+        "description": "The shape of the volume ramp (with a preview) is edited in the Voice Alarms panel in the sidebar.",
         "data": {
           "default_duration": "Ring duration",
           "ramp_seconds": "Volume ramp-up time",

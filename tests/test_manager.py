@@ -12,7 +12,7 @@ import pytest
 from freezegun.api import FrozenDateTimeFactory
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
-from custom_components.voice_alarms.const import DOMAIN, STORAGE_KEY
+from custom_components.voice_alarms.const import DEFAULT_RAMP_CURVE, DOMAIN, STORAGE_KEY
 from custom_components.voice_alarms.http import DATA_STREAMS
 from custom_components.voice_alarms.manager import AlarmError
 from custom_components.voice_alarms.models import Alarm
@@ -329,6 +329,7 @@ async def test_test_ring_and_options(
     assert config.duration == 300
     assert config.ramp.seconds == 30
     assert config.ramp.start == pytest.approx(0.1)
+    assert config.ramp.curve == DEFAULT_RAMP_CURVE
     assert config.volume is None
 
     session = await manager.async_ring(kitchen, duration=15, label="Test", origin="test")

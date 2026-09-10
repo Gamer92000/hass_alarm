@@ -8,11 +8,19 @@ from types import SimpleNamespace
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
+from pytest_homeassistant_custom_component.typing import (
+    ClientSessionGenerator,
+    WebSocketGenerator,
+)
 
+from custom_components.voice_alarms.audio import RampSpec
 from custom_components.voice_alarms.const import (
     CONF_DEFAULT_DURATION,
     CONF_DEFAULT_SOUND,
+    CONF_RAMP_CURVE,
+    CONF_RAMP_SECONDS,
+    CONF_RAMP_START,
+    DEFAULT_RAMP_CURVE,
     DEFAULT_SOUND_URL,
     DOMAIN,
     SAMPLE_RATE,
@@ -213,6 +221,11 @@ async def test_config_and_options_flow(hass: HomeAssistant, satellites, announce
     assert get_manager(hass).default_duration == 120
     assert get_manager(hass).default_sound == "https://example.com/a.mp3"
 
+    # the ramp curve has no form field (the panel edits it) and must survive the options form
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, CONF_RAMP_CURVE: [0, 0, 1, 1]}
+    )
+
     # second instance refused
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -228,7 +241,86 @@ async def test_config_and_options_flow(hass: HomeAssistant, satellites, announce
     await hass.async_block_till_done()
     assert get_manager(hass).default_duration == 60
     assert get_manager(hass).default_sound is None
+    assert entry.options[CONF_RAMP_CURVE] == [0, 0, 1, 1]
+    assert get_manager(hass).ramp.curve == (0, 0, 1, 1)
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
     assert not hass.services.has_service(DOMAIN, "add_alarm")
+
+
+async def test_websocket_set_ramp(
+    hass: HomeAssistant,
+    satellites,
+    manager,
+    hass_ws_client: WebSocketGenerator,
+    hass_read_only_access_token: str,
+) -> None:
+    """The panel saves the ramp over websocket; no entry reload, subscribers are pushed."""
+    from custom_components.voice_alarms import get_manager  # noqa: PLC0415
+
+    client = await hass_ws_client(hass)
+    await client.send_json({"id": 1, "type": "voice_alarms/subscribe"})
+    assert (await client.receive_json())["success"]
+    initial = await client.receive_json()
+    assert initial["event"]["config"]["ramp_curve"] == list(DEFAULT_RAMP_CURVE)
+
+    await client.send_json(
+        {
+            "id": 2,
+            "type": "voice_alarms/set_ramp",
+            "seconds": 45,
+            "start": 0.25,
+            "curve": [0, 0, 1, 1],
+        }
+    )
+    # the subscription push (id 1) and the command result (id 2)
+    pushed, result = sorted(
+        [await client.receive_json(), await client.receive_json()], key=lambda m: m["id"]
+    )
+    assert result["success"]
+    assert result["result"]["ramp_seconds"] == 45
+    assert result["result"]["ramp_start"] == pytest.approx(0.25)
+    assert result["result"]["ramp_curve"] == [0, 0, 1, 1]
+    assert pushed["event"]["config"]["ramp_curve"] == [0, 0, 1, 1]
+
+    assert get_manager(hass) is manager  # written into the options without a reload
+    assert manager.ramp == RampSpec(start=0.25, seconds=45, curve=(0, 0, 1, 1))
+    assert manager.entry.options[CONF_RAMP_SECONDS] == 45
+    assert manager.entry.options[CONF_RAMP_START] == 25
+    assert manager.entry.options[CONF_RAMP_CURVE] == [0, 0, 1, 1]
+
+    for msg_id, bad_curve in ((3, [0, 0, 1]), (4, [0, 0, 1, 2])):
+        await client.send_json(
+            {
+                "id": msg_id,
+                "type": "voice_alarms/set_ramp",
+                "seconds": 45,
+                "start": 0.25,
+                "curve": bad_curve,
+            }
+        )
+        result = await client.receive_json()
+        assert not result["success"]
+        assert result["error"]["code"] == "invalid_format"
+
+    # a corrupt stored curve falls back to the default instead of breaking the ring
+    hass.config_entries.async_update_entry(
+        manager.entry, options={**manager.entry.options, CONF_RAMP_CURVE: "nope"}
+    )
+    assert manager.ramp.curve == DEFAULT_RAMP_CURVE
+
+    # only administrators may change the settings
+    reader = await hass_ws_client(hass, hass_read_only_access_token)
+    await reader.send_json(
+        {
+            "id": 1,
+            "type": "voice_alarms/set_ramp",
+            "seconds": 45,
+            "start": 0.25,
+            "curve": [0, 0, 1, 1],
+        }
+    )
+    result = await reader.receive_json()
+    assert not result["success"]
+    assert result["error"]["code"] == "unauthorized"

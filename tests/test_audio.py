@@ -18,6 +18,7 @@ from custom_components.voice_alarms.audio import (
     NOTE_SPACING_SECONDS,
     FlacWriter,
     RampSpec,
+    bezier_ease,
     build_default_loop,
     flac_crc8,
     flac_crc16,
@@ -27,8 +28,14 @@ from custom_components.voice_alarms.audio import (
     stream_ffmpeg,
     wav_header,
 )
-from custom_components.voice_alarms.const import FLAC_BLOCK_SIZE, SAMPLE_RATE
+from custom_components.voice_alarms.const import (
+    DEFAULT_RAMP_CURVE,
+    FLAC_BLOCK_SIZE,
+    SAMPLE_RATE,
+)
 from tests.flac_util import parse_flac
+
+LINEAR = (0.0, 0.0, 1.0, 1.0)
 
 
 @pytest.mark.parametrize("freq", NOTE_FREQUENCIES)
@@ -69,9 +76,78 @@ def test_wav_header() -> None:
     ("t", "expected"),
     [(-1, 0.1), (0, 0.1), (15, 0.55), (30, 1.0), (60, 1.0)],
 )
-def test_ramp_gain(t, expected) -> None:
-    assert RampSpec(0.1, 30).gain(t) == pytest.approx(expected)
+def test_ramp_gain_linear(t, expected) -> None:
+    assert RampSpec(0.1, 30, LINEAR).gain(t) == pytest.approx(expected)
     assert RampSpec(0.1, 0).gain(0) == 1.0
+
+
+@pytest.mark.parametrize(
+    "curve",
+    [DEFAULT_RAMP_CURVE, LINEAR, (0.42, 0, 1, 1), (0, 0, 0.58, 1), (1, 0, 0, 1), (0, 1, 1, 0)],
+)
+def test_bezier_ease_matches_parametric_curve(curve) -> None:
+    """y(x) must agree with the curve evaluated parametrically, for any control points.
+
+    The last two curves have vertical tangents, where a minute error in x is a
+    visible error in y; hence the tolerance.
+    """
+    x1, y1, x2, y2 = curve
+    assert bezier_ease(0, curve) == 0.0
+    assert bezier_ease(1, curve) == 1.0
+    for i in range(1, 200):
+        u = i / 200
+        x = 3 * (1 - u) ** 2 * u * x1 + 3 * (1 - u) * u**2 * x2 + u**3
+        y = 3 * (1 - u) ** 2 * u * y1 + 3 * (1 - u) * u**2 * y2 + u**3
+        assert bezier_ease(x, curve) == pytest.approx(y, abs=1e-4)
+
+
+def test_ramp_gain_default_curve_is_smooth() -> None:
+    ramp = RampSpec(0.1, 30)
+    assert ramp.curve == DEFAULT_RAMP_CURVE
+    assert ramp.gain(0) == 0.1
+    assert ramp.gain(30) == 1.0
+    assert ramp.gain(15) == pytest.approx(0.55)  # the symmetric ease-in-out passes the middle
+    linear = RampSpec(0.1, 30, LINEAR)
+    assert ramp.gain(3) < linear.gain(3)
+    assert ramp.gain(27) > linear.gain(27)
+    gains = [ramp.gain(t / 10) for t in range(301)]
+    assert gains == sorted(gains)
+    # gentle at both ends: a tenth of a second barely moves the gain there ...
+    assert gains[1] - gains[0] < 1e-3
+    assert gains[-1] - gains[-2] < 1e-3
+    # ... while a linear ramp moves 0.003 per tenth of a second
+    assert linear.gain(0.1) - linear.gain(0) == pytest.approx(0.003)
+
+
+def _eval_ffmpeg_volume(expr: str, t: float) -> float:
+    """Evaluate the (comma-escaped) ffmpeg volume expression at stream time ``t``."""
+    namespace = {"min": min, "clip": lambda x, lo, hi: max(lo, min(hi, x)), "t": t}
+    return eval(expr.replace("\\,", ","), namespace)  # noqa: S307
+
+
+@pytest.mark.parametrize("curve", [DEFAULT_RAMP_CURVE, LINEAR, (1, 0, 0, 1)])
+@pytest.mark.parametrize("offset", [0, 3, 25])
+def test_ffmpeg_expr_follows_the_curve(curve, offset) -> None:
+    """The piecewise-linear expression stays close to the exact gain at every time.
+
+    Ordinary curves stay within 0.001. cubic-bezier(1, 0, 0, 1) is almost a step
+    in the middle (a rise of 0.3 within a quarter second of a 30 s ramp); the
+    knots crowd there but a linear piece still deviates by about 0.03.
+    """
+    ramp = RampSpec(0.1, 30, curve)
+    expr = ramp.ffmpeg_expr(offset)
+    assert "," not in expr.replace("\\,", "")  # every comma is escaped for the filtergraph
+    tolerance = 0.05 if curve == (1, 0, 0, 1) else 0.002
+    for i in range(0, 800):
+        t = i / 20
+        assert _eval_ffmpeg_volume(expr, t) == pytest.approx(ramp.gain(t + offset), abs=tolerance)
+    assert _eval_ffmpeg_volume(expr, 60) == 1.0  # the rounded rises add up to exactly full gain
+
+
+def test_ffmpeg_expr_without_ramp() -> None:
+    assert RampSpec(0.1, 0).ffmpeg_expr(0) == "1"
+    assert RampSpec(0.1, 30).ffmpeg_expr(30) == "1"  # the ramp is over before the stream starts
+    assert RampSpec(0.1, 30, LINEAR).ffmpeg_expr(0).startswith("min(1\\,0.1000+")
 
 
 # ------------------------------------------------------------------- FLAC
@@ -250,4 +326,5 @@ async def test_stream_ffmpeg_command(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cmd[cmd.index("-f") + 1] == "flac"
     assert cmd[cmd.index("-sample_fmt") + 1] == "s16"
     assert cmd[cmd.index("-ar") + 1] == str(SAMPLE_RATE)
-    assert "min(1\\,0.1000+(1-0.1000)*(t+3.000)/30.000)" in cmd[cmd.index("-af") + 1]
+    expected = RampSpec(0.1, 30).ffmpeg_expr(3)
+    assert cmd[cmd.index("-af") + 1] == f"volume=volume='{expected}':eval=frame"

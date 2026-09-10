@@ -8,7 +8,8 @@ Two sources exist:
   and gain-ramped by ffmpeg.
 
 Both produce a FLAC stream whose loudness ramps up over the first
-``ramp_seconds`` of the alarm. FLAC rather than WAV because satellites do not
+``ramp_seconds`` of the alarm along a cubic bezier easing curve (``RampSpec``).
+FLAC rather than WAV because satellites do not
 necessarily decode WAV at all: the stock Home Assistant Voice PE firmware only
 ships FLAC and MP3 decoders and rejects an ``audio/wav`` stream before playing
 anything. The built-in sound is wrapped into uncompressed FLAC frames right
@@ -28,8 +29,16 @@ import time as time_mod
 from array import array
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
+from itertools import pairwise
 
-from .const import FLAC_BLOCK_SIZE, SAMPLE_RATE, STREAM_CHUNK_SECONDS, STREAM_LEAD_SECONDS
+from .const import (
+    DEFAULT_RAMP_CURVE,
+    FFMPEG_RAMP_SEGMENTS,
+    FLAC_BLOCK_SIZE,
+    SAMPLE_RATE,
+    STREAM_CHUNK_SECONDS,
+    STREAM_LEAD_SECONDS,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,12 +83,66 @@ def render_note(freq: float, rate: int = SAMPLE_RATE) -> list[float]:
     return samples
 
 
+type Curve = tuple[float, float, float, float]
+# Knots of the ffmpeg ramp expression closer than this (seconds) are merged.
+_FFMPEG_MIN_STEP = 0.01
+
+
+def _bezier_coord(u: float, p1: float, p2: float) -> float:
+    """One coordinate of the cubic bezier (0, p1, p2, 1) at parameter ``u``."""
+    v = 1.0 - u
+    return 3.0 * v * v * u * p1 + 3.0 * v * u * u * p2 + u * u * u
+
+
+def bezier_ease(x: float, curve: Curve) -> float:
+    """Evaluate a CSS style ``cubic-bezier(x1, y1, x2, y2)`` easing at ``x``.
+
+    The curve runs from (0, 0) to (1, 1); ``x`` is the progress along the
+    horizontal axis, the result the eased value. The control x coordinates
+    must lie within 0..1 so that the curve is a function of x.
+    """
+    if x <= 0.0:
+        return 0.0
+    if x >= 1.0:
+        return 1.0
+    x1, y1, x2, y2 = curve
+    # Newton-Raphson on the parameter, then bisection if it did not converge
+    # (the slope can vanish, e.g. for cubic-bezier(1, 0, 0, 1) at the middle).
+    # Tight tolerances: where the curve is nearly vertical a tiny error in x is
+    # a large error in y.
+    u = x
+    for _ in range(8):
+        error = _bezier_coord(u, x1, x2) - x
+        if abs(error) < 1e-9:
+            break
+        v = 1.0 - u
+        slope = 3.0 * v * v * x1 + 6.0 * v * u * (x2 - x1) + 3.0 * u * u * (1.0 - x2)
+        if slope < 1e-6:
+            break
+        u -= error / slope
+    if not 0.0 <= u <= 1.0 or abs(_bezier_coord(u, x1, x2) - x) > 1e-9:
+        low, high = 0.0, 1.0
+        for _ in range(50):
+            u = (low + high) / 2.0
+            if _bezier_coord(u, x1, x2) < x:
+                low = u
+            else:
+                high = u
+    return _bezier_coord(u, y1, y2)
+
+
 @dataclass(slots=True)
 class RampSpec:
-    """Describe the volume ramp."""
+    """Describe the volume ramp.
+
+    The gain rises from ``start`` at t=0 to 1 at t=``seconds``, shaped by a
+    cubic bezier easing ``curve`` given like CSS ``cubic-bezier(x1, y1, x2, y2)``:
+    x is the fraction of ``seconds`` elapsed, y the fraction of the rise done.
+    """
 
     start: float  # gain at t=0 (0..1)
     seconds: float  # seconds until full gain
+    curve: Curve = DEFAULT_RAMP_CURVE
 
     def gain(self, t: float) -> float:
         """Return gain (0..1) at ``t`` seconds after the alarm started."""
@@ -87,14 +150,45 @@ class RampSpec:
             return 1.0
         if t <= 0:
             return self.start
-        return self.start + (1.0 - self.start) * (t / self.seconds)
+        eased = bezier_ease(t / self.seconds, self.curve)
+        return max(0.0, min(1.0, self.start + (1.0 - self.start) * eased))
 
     def ffmpeg_expr(self, offset: float) -> str:
-        """Return an ffmpeg volume expression for this ramp."""
-        if self.seconds <= 0:
+        """Return an ffmpeg volume expression for this ramp.
+
+        ffmpeg's expression language cannot invert the bezier, so the curve is
+        approximated by linear pieces: the gain at 0 plus, per piece, its rise
+        times a ``clip()`` of how far into the piece the time is. The knots sit
+        at uniform curve parameter (``FFMPEG_RAMP_SEGMENTS`` of them), which
+        needs no root finding and crowds them where the curve is steep, exactly
+        where a linear piece would otherwise be furthest off. ``offset`` is the
+        alarm time at which the stream starts (``t`` is stream time). Commas are
+        escaped for the filtergraph.
+        """
+        if self.seconds <= 0 or offset >= self.seconds:
             return "1"
-        start = f"{self.start:.4f}"
-        return f"min(1\\,{start}+(1-{start})*(t+{offset:.3f})/{self.seconds:.3f})"
+        x1, y1, x2, y2 = self.curve
+        knots: list[tuple[float, float]] = []
+        for i in range(FFMPEG_RAMP_SEGMENTS + 1):
+            u = i / FFMPEG_RAMP_SEGMENTS
+            t = self.seconds * _bezier_coord(u, x1, x2)
+            # Rounded here so that the rises below telescope to exactly the end gain.
+            gain = round(self.start + (1.0 - self.start) * _bezier_coord(u, y1, y2), 4)
+            gain = max(0.0, min(1.0, gain))
+            if knots and t - knots[-1][0] < _FFMPEG_MIN_STEP:
+                # Too close for the 3-decimal formatting below; the end knot
+                # replaces its neighbour, others are dropped.
+                if i == FFMPEG_RAMP_SEGMENTS:
+                    knots[-1] = (t, gain)
+                continue
+            knots.append((t, gain))
+        terms = [f"{knots[0][1]:.4f}"]
+        for (t0, g0), (t1, g1) in pairwise(knots):
+            rise = g1 - g0
+            if rise == 0:
+                continue
+            terms.append(f"{rise:.4f}*clip((t{offset - t0:+.3f})/{t1 - t0:.3f}\\,0\\,1)")
+        return "min(1\\," + "+".join(terms) + ")"
 
 
 def wav_header(num_samples: int, rate: int = SAMPLE_RATE, channels: int = 1) -> bytes:

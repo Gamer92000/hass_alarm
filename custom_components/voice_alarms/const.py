@@ -22,6 +22,7 @@ STORAGE_VERSION: Final = 1
 CONF_DEFAULT_DURATION: Final = "default_duration"  # seconds
 CONF_RAMP_SECONDS: Final = "ramp_seconds"
 CONF_RAMP_START: Final = "ramp_start"  # percent of full level at t=0
+CONF_RAMP_CURVE: Final = "ramp_curve"  # [x1, y1, x2, y2] cubic-bezier easing, see RampSpec
 CONF_ALARM_VOLUME: Final = "alarm_volume"  # percent, optional
 CONF_DEFAULT_SOUND: Final = "default_sound"  # url / media-source id, "" = built-in
 CONF_REMINDER_REPEATS: Final = "reminder_repeats"
@@ -32,6 +33,7 @@ CONF_DEVICE_STOP_PAUSE: Final = "device_stop_pause"  # seconds, 0 = dismiss
 DEFAULT_DURATION: Final = 300
 DEFAULT_RAMP_SECONDS: Final = 30
 DEFAULT_RAMP_START: Final = 10
+DEFAULT_RAMP_CURVE: Final = (0.42, 0.0, 0.58, 1.0)  # CSS "ease-in-out"
 DEFAULT_REMINDER_REPEATS: Final = 3
 DEFAULT_REMINDER_INTERVAL: Final = 60
 DEFAULT_MISSED_GRACE: Final = 600
@@ -60,6 +62,8 @@ SAMPLE_RATE: Final = 44100
 FLAC_BLOCK_SIZE: Final = 4096
 STREAM_CHUNK_SECONDS: Final = 0.25
 STREAM_LEAD_SECONDS: Final = 2.0
+# The ffmpeg volume expression approximates the ramp curve with this many linear segments.
+FFMPEG_RAMP_SEGMENTS: Final = 32
 # ESPHome waits at most 5 minutes for an announcement, so keep segments shorter.
 MAX_SEGMENT_SECONDS: Final = 240
 # Announcements that end faster than this after the stream was opened are
@@ -72,6 +76,7 @@ RECENTLY_DISMISSED_SECONDS: Final = 180
 SIGNAL_ALARMS_UPDATED: Final = f"{DOMAIN}_alarms_updated"
 SIGNAL_TARGETS_UPDATED: Final = f"{DOMAIN}_targets_updated"
 SIGNAL_RINGING_UPDATED: Final = f"{DOMAIN}_ringing_updated"
+SIGNAL_CONFIG_UPDATED: Final = f"{DOMAIN}_config_updated"
 
 # HTTP
 STREAM_URL_BASE: Final = f"/api/{DOMAIN}/stream"
