@@ -7,6 +7,7 @@ const ICONS = {
   bell:
     "M21,19V20H3V19L5,17V11C5,7.9 7.03,5.17 10,4.29C10,4.19 10,4.1 10,4A2,2 0 0,1 12,2A2,2 0 0,1 14,4C14,4.1 14,4.19 14,4.29C16.97,5.17 19,7.9 19,11V17L21,19M14,21A2,2 0 0,1 12,23A2,2 0 0,1 10,21M19.75,3.19L18.33,4.61C20.04,6.3 21,8.6 21,11H23C23,8.07 21.84,5.25 19.75,3.19M1,11H3C3,8.6 3.96,6.3 5.67,4.61L4.25,3.19C2.16,5.25 1,8.07 1,11Z",
   plus: "M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z",
+  menu: "M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z",
   del: "M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z",
   edit: "M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z",
   skip: "M16,18H18V6H16M6,18L14.5,12L6,6V18Z",
@@ -25,6 +26,8 @@ const DAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 // Intl for the same locale.
 const STRINGS = {
   en: {
+    menu: "Sidebar",
+    add: "Add",
     add_alarm: "Add alarm",
     add_reminder: "Add reminder",
     loading: "Loading…",
@@ -121,6 +124,8 @@ const STRINGS = {
     tomorrow: "tomorrow",
   },
   de: {
+    menu: "Seitenleiste",
+    add: "Hinzufügen",
     add_alarm: "Wecker hinzufügen",
     add_reminder: "Erinnerung hinzufügen",
     loading: "Lädt…",
@@ -362,6 +367,11 @@ const STYLE = `
   .toolbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 12px; height: var(--header-height, 56px); padding: 0 16px; background: var(--app-header-background-color, var(--primary-color)); color: var(--app-header-text-color, #fff); }
   .toolbar h1 { font-size: 20px; font-weight: 400; margin: 0; flex: 1; }
   .toolbar svg { fill: currentColor; }
+  .toolbar .menu { flex: none; background: transparent; color: inherit; padding: 8px; margin: 0 4px 0 -8px; border-radius: 50%; }
+  .toolbar .menu:hover { background: rgba(255, 255, 255, .15); }
+  .fab { position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 3; height: 48px; padding: 0 20px 0 16px; border-radius: 24px; background: var(--accent-color, #ff9800); color: var(--text-accent-color, var(--text-primary-color, #fff)); box-shadow: 0 3px 5px -1px rgba(0,0,0,.2), 0 6px 10px 0 rgba(0,0,0,.14), 0 1px 18px 0 rgba(0,0,0,.12); }
+  .fab svg { fill: currentColor; }
+  main.narrow { padding-bottom: 88px; }
   main { max-width: 960px; margin: 0 auto; padding: 16px; }
   .card { background: var(--card-background-color, #fff); border-radius: var(--ha-card-border-radius, 12px); box-shadow: var(--ha-card-box-shadow, 0 2px 4px rgba(0,0,0,.15)); border: var(--ha-card-border-width, 1px) solid var(--ha-card-border-color, var(--divider-color, #e0e0e0)); padding: 16px; margin-bottom: 12px; }
   .card.ringing { border-color: var(--error-color, #db4437); background: color-mix(in srgb, var(--error-color, #db4437) 10%, var(--card-background-color, #fff)); }
@@ -491,7 +501,9 @@ class VoiceAlarmsPanel extends HTMLElement {
 
   set hass(hass) {
     const first = !this._hass;
+    const dockChanged = !first && hass?.dockedSidebar !== this._hass.dockedSidebar;
     this._hass = hass;
+    if (dockChanged) this._render();
     const locale = hass?.locale?.language || hass?.language || navigator.language;
     if (locale !== LOCALE) {
       setLanguage(locale);
@@ -503,7 +515,9 @@ class VoiceAlarmsPanel extends HTMLElement {
     return this._hass;
   }
   set narrow(v) {
+    const changed = !!v !== !!this._narrow;
     this._narrow = v;
+    if (changed) this._render();
   }
   set panel(p) {
     this._panel = p;
@@ -548,9 +562,21 @@ class VoiceAlarmsPanel extends HTMLElement {
     const st = this._state;
     const now = new Date();
     const parts = [];
-    parts.push(`<div class="toolbar">${icon("alarm")}<h1>Voice Alarms</h1>
-      <button data-action="add" data-kind="alarm">${icon("plus")} ${t("add_alarm")}</button>
-      <button data-action="add" data-kind="reminder">${icon("plus")} ${t("add_reminder")}</button></div><main>`);
+    // Like HA's ha-menu-button: custom panels draw their own toolbar, so the
+    // sidebar toggle only exists if we render it (narrow layout or sidebar
+    // set to "always hidden").
+    const narrow = !!this._narrow;
+    const menu =
+      narrow || this._hass?.dockedSidebar === "always_hidden"
+        ? `<button class="menu" data-action="menu" aria-label="${t("menu")}" title="${t("menu")}">${icon("menu")}</button>`
+        : "";
+    // Narrow layout has no room for two labelled buttons in the toolbar: one
+    // floating action button instead, the editor's type select picks reminder.
+    const add = narrow
+      ? `<button class="fab" data-action="add" data-kind="alarm">${icon("plus")} ${t("add")}</button>`
+      : `<button data-action="add" data-kind="alarm">${icon("plus")} ${t("add_alarm")}</button>
+      <button data-action="add" data-kind="reminder">${icon("plus")} ${t("add_reminder")}</button>`;
+    parts.push(`<div class="toolbar">${menu}${icon("alarm")}<h1>Voice Alarms</h1>${narrow ? "" : add}</div>${narrow ? add : ""}<main class="${narrow ? "narrow" : ""}">`);
     if (this._error) parts.push(`<div class="error">${esc(this._error)}</div>`);
     if (!st) {
       parts.push(`<div class="empty">${t("loading")}</div></main>`);
@@ -643,6 +669,10 @@ class VoiceAlarmsPanel extends HTMLElement {
     const { action, id, target, kind } = el.dataset;
     const alarm = id && this._state.alarms.find((a) => a.id === id);
     switch (action) {
+      case "menu":
+        // Handled by home-assistant-main; bubbles + composed so it leaves the shadow root.
+        this.dispatchEvent(new CustomEvent("hass-toggle-menu", { bubbles: true, composed: true }));
+        break;
       case "add":
         this._openEditor(null, kind || "alarm");
         break;
@@ -874,6 +904,7 @@ class VoiceAlarmsPanel extends HTMLElement {
   }
 
   _openEditor(alarm, newKind = "alarm") {
+    if (!this._state) return;
     const dialog = this.shadowRoot.getElementById("editor");
     const targets = this._state.targets;
     const today = new Date();
