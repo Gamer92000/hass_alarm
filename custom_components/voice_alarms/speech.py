@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from homeassistant.util import dt as dt_util
 
@@ -52,21 +52,24 @@ def format_relative(target: datetime, now: datetime | None = None) -> str:
     return f"in {parts[0]} and {parts[1]}"
 
 
-def format_when(target: datetime, now: datetime | None = None) -> str:
-    """Return 'today at 18:00', 'tomorrow (Tuesday 8 September) at 06:30', ..."""
+def format_day(day: date, now: datetime | None = None) -> str:
+    """Return 'today', 'tomorrow (Tuesday 8 September)' or 'on Friday 11 September'."""
     now = now or dt_util.utcnow()
-    local = dt_util.as_local(target)
     today = dt_util.as_local(now).date()
-    clock = local.strftime("%H:%M")
-    day = local.date()
-    long_day = f"{WEEKDAY_NAMES[day.weekday()]} {day.day} {local.strftime('%B')}"
+    long_day = f"{WEEKDAY_NAMES[day.weekday()]} {day.day} {day.strftime('%B')}"
     if day.year != today.year:
         long_day += f" {day.year}"
     if day == today:
-        return f"today at {clock}"
+        return "today"
     if day == today + timedelta(days=1):
-        return f"tomorrow ({long_day}) at {clock}"
-    return f"on {long_day} at {clock}"
+        return f"tomorrow ({long_day})"
+    return f"on {long_day}"
+
+
+def format_when(target: datetime, now: datetime | None = None) -> str:
+    """Return 'today at 18:00', 'tomorrow (Tuesday 8 September) at 06:30', ..."""
+    local = dt_util.as_local(target)
+    return f"{format_day(local.date(), now)} at {local.strftime('%H:%M')}"
 
 
 def format_duration(seconds: int) -> str:
@@ -124,6 +127,23 @@ def describe_alarm(
             text += f", next {format_when(nxt, now)} ({format_relative(nxt, now)})"
         elif not alarm.is_recurring:
             text += " (already in the past)"
+    return text
+
+
+def describe_briefly(alarm: Alarm, at: datetime, *, skipped: bool = False) -> str:
+    """Describe one ring in a day listing: '08:45', '08:45 (work)', 'a reminder 'x' at 17:00'."""
+    clock = dt_util.as_local(at).strftime("%H:%M")
+    notes: list[str] = []
+    if alarm.is_reminder:
+        text = f"a reminder '{alarm.label}' at {clock}"
+    else:
+        text = clock
+        if alarm.name:
+            notes.append(alarm.name)
+    if skipped:
+        notes.append("skipped")
+    if notes:
+        text += f" ({', '.join(notes)})"
     return text
 
 

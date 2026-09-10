@@ -67,9 +67,10 @@ automatically. No extra configuration is needed. Examples:
 | "Set an alarm for 7 on weekdays called work" | Repeating alarm Mon–Fri. |
 | "Set an alarm for 8 tomorrow in the bedroom" | Target another satellite by name or area. |
 | "Remind me at 5 pm to call mom" | Spoken reminder. |
-| "Skip tomorrow's alarm" / "Don't wake me tomorrow" | Skips only the next occurrence. |
-| "Move my work alarm to 6:45" / "Disable the work alarm" | Updates the alarm. |
+| "Skip tomorrow's alarm" / "Don't wake me tomorrow" | Skips only the next occurrence (all alarms of that wake-up if you have several). |
+| "Move my work alarm to 6:45" / "Disable all my alarms" | Updates the alarm(s). |
 | "What alarms do I have?" | Lists everything with the next ring time. |
+| "When will you wake me tomorrow?" | Just the times that ring that day, e.g. *"08:45, 08:50 and 09:00"*. |
 | "Delete the 7 o'clock alarm" | Deletes it (asks if several match). |
 | "Stop" / "Dismiss the alarm" / "Snooze for 10 minutes" | Stops (or snoozes) the ringing alarm. |
 

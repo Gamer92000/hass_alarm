@@ -249,6 +249,16 @@ class Alarm:
             return None
         return self.next_occurrence(max(now, self.pending_after()))
 
+    def occurrence_on(self, day: date, now: datetime) -> datetime | None:
+        """Return the still-pending occurrence on the local ``day``, ignoring skips."""
+        start = combine_local(day, time(0, 0))
+        end = combine_local(day + timedelta(days=1), time(0, 0))
+        after = max(now, self.pending_after(), start - timedelta(microseconds=1))
+        at = self.next_scheduled(after)
+        if at is None or at >= end:
+            return None
+        return at
+
     # ---- (de)serialisation ---------------------------------------------------
 
     def to_dict(self) -> dict[str, Any]:

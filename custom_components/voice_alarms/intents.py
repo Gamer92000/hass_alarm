@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -32,6 +32,8 @@ from .models import Alarm, ParseError, parse_date, parse_time, parse_weekdays
 from .ringer import STATE_PAUSED, RingSession
 from .speech import (
     describe_alarm,
+    describe_briefly,
+    format_day,
     format_days,
     format_relative,
     format_when,
@@ -56,6 +58,17 @@ DATE_HELP = (
     "Omit to use the next time the given time comes around."
 )
 MATCH_HELP = "Filters to pick the alarm(s): alarm_id (exact), name, time, weekdays, date, target."
+ID_FILTER_HELP = "Exact alarm id from a previous listing."
+NAME_FILTER_HELP = "Name or label of the alarm, to find it."
+TIME_FILTER_HELP = "Ring time of the alarm, to find it; 24-hour HH:MM."
+WEEKDAYS_FILTER_HELP = (
+    "Repeat days of the alarm, to find it: list or comma separated "
+    f"{', '.join(WEEKDAY_CODES)}, or 'daily', 'weekdays', 'weekends'."
+)
+DATE_FILTER_HELP = (
+    "Day the alarm rings on, to find it: YYYY-MM-DD, 'today', 'tomorrow' or a weekday name."
+)
+TARGET_FILTER_HELP = "Satellite the alarm belongs to (name/area), to find it."
 
 
 class IntentFailed(Exception):
@@ -163,8 +176,9 @@ class _VoiceAlarmIntent(intent.IntentHandler):
                 same = [a for a in alarms if set(a.weekdays) == wanted]
                 alarms = same or [a for a in alarms if wanted & set(a.weekdays)]
         if date_text := self._slot(intent_obj, "date"):
-            wanted_date = parse_date(date_text, dt_util.utcnow())
-            alarms = [a for a in alarms if a.date == wanted_date]
+            now = dt_util.utcnow()
+            wanted_date = parse_date(date_text, now)
+            alarms = [a for a in alarms if a.occurrence_on(wanted_date, now) is not None]
         return alarms
 
     def _has_filters(self, intent_obj: intent.Intent) -> bool:
@@ -172,6 +186,10 @@ class _VoiceAlarmIntent(intent.IntentHandler):
             self._slot(intent_obj, key)
             for key in ("alarm_id", "name", "time", "weekdays", "date", "target")
         )
+
+    def _names_one(self, intent_obj: intent.Intent) -> bool:
+        """True if the slots point at one particular alarm rather than a group."""
+        return any(self._slot(intent_obj, key) for key in ("alarm_id", "name", "time"))
 
     def _pick_one(self, intent_obj: intent.Intent, candidates: list[Alarm], verb: str) -> Alarm:
         if not candidates:
@@ -252,7 +270,12 @@ class SetAlarmIntent(_VoiceAlarmIntent):
         at = parse_time(self._slot(intent_obj, "time"))
         weekdays = parse_weekdays(self._slot(intent_obj, "weekdays"))
         date_text = self._slot(intent_obj, "date")
-        on_date = parse_date(date_text, now) if date_text and not weekdays else None
+        if weekdays and date_text:
+            raise IntentFailed(
+                "An alarm either repeats on weekdays or rings once on a date, not both. Drop "
+                "the date; a repeating alarm starts with its next occurrence."
+            )
+        on_date = parse_date(date_text, now) if date_text else None
         target = self._resolve_target(intent_obj, self._slot(intent_obj, "target"))
         message = self._slot(intent_obj, "message")
         duration_minutes = self._slot(intent_obj, "duration_minutes")
@@ -287,11 +310,18 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
     intent_type = INTENT_LIST
     description = (
         "List all configured alarms and reminders with their next ring time, and anything "
-        "currently ringing. Optionally limit to one satellite."
+        "currently ringing. Optionally limit to one satellite. Give a date to get only what "
+        "rings on that day as a short list of times, e.g. for 'when will you wake me "
+        "tomorrow?' or 'do I have an alarm on Friday?'."
     )
     slot_schema = {
         vol.Optional(
             "target", description="Only list alarms on this satellite (name/area)."
+        ): cv.string,
+        vol.Optional(
+            "date",
+            description="Only list what rings on this day: YYYY-MM-DD, 'today', 'tomorrow' or "
+            "a weekday name.",
         ): cv.string,
     }
 
@@ -300,16 +330,22 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
         target_query = self._slot(intent_obj, "target")
         alarms = self.manager.sorted_alarms()
         scope = ""
+        scoped: list[Target] = []
         if target_query:
-            targets = self.manager.match_target(target_query)
-            if not targets:
+            scoped = self.manager.match_target(target_query)
+            if not scoped:
                 raise IntentFailed(
                     f"I don't know a voice satellite called '{target_query}'. "
                     f"Available satellites: {self._target_names()}."
                 )
-            ids = {t.entity_id for t in targets}
+            ids = {t.entity_id for t in scoped}
             alarms = [a for a in alarms if a.target in ids]
-            scope = f" on {join_list([t.display for t in targets])}"
+            scope = f" on {join_list([t.display for t in scoped])}"
+
+        if date_text := self._slot(intent_obj, "date"):
+            day = parse_date(date_text, now)
+            self._list_day(intent_obj, response, alarms, day, scope, scoped, now)
+            return
 
         parts: list[str] = []
         if not alarms:
@@ -318,7 +354,7 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
             count = len(alarms)
             noun = "alarm" if count == 1 else "alarms"
             listing = "; ".join(
-                f"{idx}. {describe_alarm(a, self.manager.target(a.target), now)} [id {a.id}]"
+                f"{idx}. {describe_alarm(a, self.manager.target(a.target), now)}"
                 for idx, a in enumerate(alarms, start=1)
             )
             parts.append(f"You have {count} {noun}{scope}: {listing}.")
@@ -331,8 +367,78 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
         response.async_set_speech_slots(
             {
                 "count": len(alarms),
-                "alarms": [a.public_dict(now) for a in alarms],
+                "alarms": [_alarm_summary(a, now) for a in alarms],
                 "ringing": [s.to_dict() for s in ringing],
+            }
+        )
+
+    def _list_day(
+        self,
+        intent_obj: intent.Intent,
+        response: intent.IntentResponse,
+        alarms: list[Alarm],
+        day: date,
+        scope: str,
+        scoped: list[Target],
+        now: datetime,
+    ) -> None:
+        """Answer 'what rings on <day>' with just the times, grouped by satellite."""
+        rings: list[tuple[datetime, Alarm, bool]] = []
+        for alarm in alarms:
+            if not alarm.enabled:
+                continue
+            at = alarm.occurrence_on(day, now)
+            if at is not None:
+                rings.append((at, alarm, alarm.skipped_occurrence == at))
+        rings.sort(key=lambda ring: (ring[0], ring[1].label.lower()))
+        when = format_day(day, now)
+
+        if not rings:
+            text = f"There are no alarms or reminders {when}{scope}."
+            upcoming = [a for a in alarms if a.next_pending(now) is not None]
+            if upcoming:
+                nxt = upcoming[0]
+                described = describe_alarm(nxt, self.manager.target(nxt.target), now)
+                text += f" The next one is the {described}."
+            response.async_set_speech(text)
+            response.async_set_speech_slots({"date": day.isoformat(), "count": 0, "alarms": []})
+            return
+
+        # Group by satellite, keeping time order. The satellite is named unless everything
+        # is on the one the user is talking to (or the one they asked about).
+        groups: dict[str, list[str]] = {}
+        for at, alarm, skipped in rings:
+            groups.setdefault(alarm.target, []).append(describe_briefly(alarm, at, skipped=skipped))
+        implied = {t.entity_id for t in scoped}
+        if (current := self._current_target(intent_obj)) is not None:
+            implied.add(current.entity_id)
+        name_targets = len(groups) > 1 or not set(groups) <= implied
+        segments: list[str] = []
+        for entity_id, items in groups.items():
+            segment = join_list(items)
+            if name_targets:
+                target = self.manager.target(entity_id)
+                segment += f" on {target.display if target else entity_id}"
+            segments.append(segment)
+        count = len(rings)
+        noun = "alarm" if count == 1 else "alarms"
+        text = f"{when[0].upper()}{when[1:]} you have {count} {noun}{scope}: {'; '.join(segments)}."
+        response.async_set_speech(text)
+        response.async_set_speech_slots(
+            {
+                "date": day.isoformat(),
+                "count": count,
+                "alarms": [
+                    {
+                        "alarm_id": alarm.id,
+                        "label": alarm.label,
+                        "kind": alarm.kind,
+                        "target": alarm.target,
+                        "rings_at": at.isoformat(),
+                        "skipped": skipped,
+                    }
+                    for at, alarm, skipped in rings
+                ],
             }
         )
 
@@ -343,16 +449,16 @@ class DeleteAlarmIntent(_VoiceAlarmIntent):
     intent_type = INTENT_DELETE
     description = (
         "Delete (cancel, remove) alarms or reminders. " + MATCH_HELP + " Set all=true to delete "
-        "every matching alarm, or every alarm when no filter is given. The response lists what "
-        "was deleted."
+        "every matching alarm, or every alarm when no filter is given. To silence a repeating "
+        "alarm for one day use skip next instead. The response lists what was deleted."
     )
     slot_schema = {
-        vol.Optional("alarm_id", description="Exact alarm id from a previous listing."): cv.string,
-        vol.Optional("name"): cv.string,
-        vol.Optional("time", description=TIME_HELP): cv.string,
-        vol.Optional("weekdays", description=WEEKDAYS_HELP): vol.Any(cv.string, [cv.string]),
-        vol.Optional("date", description=DATE_HELP): cv.string,
-        vol.Optional("target", description="Satellite the alarm belongs to."): cv.string,
+        vol.Optional("alarm_id", description=ID_FILTER_HELP): cv.string,
+        vol.Optional("name", description=NAME_FILTER_HELP): cv.string,
+        vol.Optional("time", description=TIME_FILTER_HELP): cv.string,
+        vol.Optional("weekdays", description=WEEKDAYS_FILTER_HELP): vol.Any(cv.string, [cv.string]),
+        vol.Optional("date", description=DATE_FILTER_HELP): cv.string,
+        vol.Optional("target", description=TARGET_FILTER_HELP): cv.string,
         vol.Optional(
             "all", description="Delete every matching alarm instead of exactly one."
         ): cv.boolean,
@@ -389,23 +495,62 @@ class SkipNextIntent(_VoiceAlarmIntent):
     intent_type = INTENT_SKIP_NEXT
     description = (
         "Skip only the next occurrence of a repeating alarm, e.g. 'skip tomorrow's alarm' or "
-        "'don't wake me tomorrow'. Later occurrences stay. " + MATCH_HELP + " Set undo=true to "
-        "reinstate a skipped occurrence."
+        "'don't wake me tomorrow'. Later occurrences stay. " + MATCH_HELP + " Without a name, "
+        "time or id it skips every alarm of the next wake-up on the user's satellite (several "
+        "alarms a few minutes apart count as one wake-up). Set all=true to skip every matching "
+        "alarm, undo=true to reinstate skipped occurrences."
     )
     slot_schema = {
-        vol.Optional("alarm_id", description="Exact alarm id from a previous listing."): cv.string,
-        vol.Optional("name"): cv.string,
-        vol.Optional("time", description=TIME_HELP): cv.string,
-        vol.Optional("weekdays", description=WEEKDAYS_HELP): vol.Any(cv.string, [cv.string]),
-        vol.Optional("target", description="Satellite the alarm belongs to."): cv.string,
-        vol.Optional("undo", description="Reinstate the skipped occurrence."): cv.boolean,
+        vol.Optional("alarm_id", description=ID_FILTER_HELP): cv.string,
+        vol.Optional("name", description=NAME_FILTER_HELP): cv.string,
+        vol.Optional("time", description=TIME_FILTER_HELP): cv.string,
+        vol.Optional("weekdays", description=WEEKDAYS_FILTER_HELP): vol.Any(cv.string, [cv.string]),
+        vol.Optional(
+            "date",
+            description="Day of the ring to skip: YYYY-MM-DD, 'today', 'tomorrow' or a weekday "
+            "name. Only the alarm's very next ring can be skipped.",
+        ): cv.string,
+        vol.Optional("target", description=TARGET_FILTER_HELP): cv.string,
+        vol.Optional("all", description="Skip (or reinstate) every matching alarm."): cv.boolean,
+        vol.Optional(
+            "undo", description="Reinstate the skipped occurrence(s) instead."
+        ): cv.boolean,
     }
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
-        candidates = [a for a in self._match_alarms(intent_obj) if a.is_recurring]
-        alarm = self._pick_one(intent_obj, candidates, "skip")
         undo = bool(self._slot(intent_obj, "undo"))
+        candidates = [a for a in self._match_alarms(intent_obj) if a.is_recurring]
+        if date_text := self._slot(intent_obj, "date"):
+            day = parse_date(date_text, now)
+            on_day = [a for a in candidates if _next_ring_day(a, now) == day]
+            if candidates and not on_day:
+                later = join_list(
+                    [
+                        f"'{a.label}' rings next {format_when(nxt, now)}"
+                        for a in candidates
+                        if (nxt := _next_ring(a, now)) is not None
+                    ]
+                )
+                raise IntentFailed(f"I can only skip the very next ring: {later}.")
+            candidates = on_day
+        every = bool(self._slot(intent_obj, "all"))
+        if not every and len(candidates) > 1 and not self._names_one(intent_obj):
+            # "Don't wake me tomorrow": every alarm of the next wake-up on the user's
+            # satellite (or the one asked about), not one picked at random.
+            if self._slot(intent_obj, "target"):
+                pool = candidates
+            else:
+                current = self._current_target(intent_obj)
+                pool = [a for a in candidates if current and a.target == current.entity_id]
+            if len(pool) > 1:
+                first = min(_next_ring_day(a, now) for a in pool)
+                candidates = [a for a in pool if _next_ring_day(a, now) == first]
+                every = True
+        if every and len(candidates) > 1:
+            await self._skip_many(response, candidates, undo, now)
+            return
+        alarm = self._pick_one(intent_obj, candidates, "reinstate" if undo else "skip")
         target = self.manager.target(alarm.target)
         where = target.display if target else alarm.target
         if undo:
@@ -452,6 +597,46 @@ class SkipNextIntent(_VoiceAlarmIntent):
             }
         )
 
+    async def _skip_many(
+        self,
+        response: intent.IntentResponse,
+        alarms: list[Alarm],
+        undo: bool,
+        now: datetime,
+    ) -> None:
+        """Skip (or reinstate) several alarms and describe them grouped by day and satellite."""
+        if undo:
+            alarms = [a for a in alarms if a.skipped_occurrence is not None]
+            if not alarms:
+                raise IntentFailed("None of the matching alarms has a skipped occurrence.")
+        results = [await self.manager.async_skip_next(a.id, undo=undo) for a in alarms]
+        results.sort(key=lambda r: (r[1] is None, r[1] or now, r[0].label.lower()))
+        groups: dict[tuple[date, str], list[str]] = {}
+        for alarm, at in results:
+            if at is None:
+                continue
+            key = (dt_util.as_local(at).date(), alarm.target)
+            groups.setdefault(key, []).append(describe_briefly(alarm, at))
+        segments: list[str] = []
+        for (day, entity_id), items in groups.items():
+            target = self.manager.target(entity_id)
+            where = target.display if target else entity_id
+            segments.append(f"{join_list(items)} on {where} {format_day(day, now)}")
+        verb = "Reinstated" if undo else "Skipping"
+        text = f"{verb} {len(results)} alarms: {'; '.join(segments)}."
+        nexts = [nxt for alarm, _ in results if (nxt := alarm.next_pending(now)) is not None]
+        if nexts:
+            nxt = min(nexts)
+            text += f" The next ring is {format_when(nxt, now)} ({format_relative(nxt, now)})."
+        response.async_set_speech(text)
+        response.async_set_speech_slots(
+            {
+                "alarm_ids": [alarm.id for alarm, _ in results],
+                "skipped": [at.isoformat() for _, at in results if at is not None],
+                "next": min(nexts).isoformat() if nexts else None,
+            }
+        )
+
 
 class UpdateAlarmIntent(_VoiceAlarmIntent):
     """Change an alarm."""
@@ -461,16 +646,21 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
         "Change an existing alarm or reminder: move it to a new time, date or weekdays, rename it, "
         "move it to another satellite, change its message, or enable/disable it. "
         + MATCH_HELP
-        + " The response says exactly what changed."
+        + " Set all=true to change every matching alarm, or every alarm when no filter is "
+        "given (e.g. 'disable all my alarms'). The response says exactly what changed."
     )
     slot_schema = {
-        vol.Optional("alarm_id", description="Exact alarm id from a previous listing."): cv.string,
+        vol.Optional("alarm_id", description=ID_FILTER_HELP): cv.string,
         vol.Optional("name", description="Current name (to find the alarm)."): cv.string,
         vol.Optional("time", description="Current time (to find the alarm), HH:MM."): cv.string,
         vol.Optional("weekdays", description="Current weekdays (to find the alarm)."): vol.Any(
             cv.string, [cv.string]
         ),
+        vol.Optional("date", description=DATE_FILTER_HELP): cv.string,
         vol.Optional("target", description="Current satellite (to find the alarm)."): cv.string,
+        vol.Optional(
+            "all", description="Change every matching alarm instead of exactly one."
+        ): cv.boolean,
         vol.Optional("new_time", description="New time, 24-hour HH:MM."): cv.string,
         vol.Optional(
             "new_date",
@@ -492,7 +682,13 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
-        alarm = self._pick_one(intent_obj, self._match_alarms(intent_obj), "change")
+        candidates = self._match_alarms(intent_obj)
+        if self._slot(intent_obj, "all"):
+            if not candidates:
+                raise IntentFailed("There are no alarms to change.")
+            alarms = candidates
+        else:
+            alarms = [self._pick_one(intent_obj, candidates, "change")]
         changes: dict[str, Any] = {}
         described: list[str] = []
         if new_time := self._slot(intent_obj, "new_time"):
@@ -513,8 +709,6 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
                 described.append(f"repeat to {format_days(changes['weekdays'])}")
         if new_date := self._slot(intent_obj, "new_date"):
             changes["date"] = parse_date(new_date, now)
-            if "weekdays" not in changes and alarm.is_recurring:
-                changes["weekdays"] = []
             described.append(f"date to {changes['date'].isoformat()}")
         if new_name := self._slot(intent_obj, "new_name"):
             changes["name"] = new_name
@@ -536,13 +730,29 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
             raise IntentFailed(
                 "Nothing to change: give a new time, days, name, target or enabled flag."
             )
-        alarm = await self.manager.async_update_alarm(alarm.id, **changes)
-        target = self.manager.target(alarm.target)
-        text = f"Changed {join_list(described)}. It is now {describe_alarm(alarm, target, now)}."
+        updated: list[Alarm] = []
+        for alarm in alarms:
+            alarm_changes = dict(changes)
+            # A new date turns a repeating alarm into a one-time one unless days were given too.
+            if "date" in alarm_changes and "weekdays" not in alarm_changes and alarm.is_recurring:
+                alarm_changes["weekdays"] = []
+            updated.append(await self.manager.async_update_alarm(alarm.id, **alarm_changes))
+        descriptions = [describe_alarm(a, self.manager.target(a.target), now) for a in updated]
+        if len(updated) == 1:
+            text = f"Changed {join_list(described)}. It is now {descriptions[0]}."
+        else:
+            text = (
+                f"Changed {join_list(described)} for {len(updated)} alarms. They are now: "
+                f"{'; '.join(descriptions)}."
+            )
         response.async_set_speech(text)
-        nxt = alarm.next_pending(now)
+        nexts = [nxt for a in updated if (nxt := a.next_pending(now)) is not None]
         response.async_set_speech_slots(
-            {"alarm_id": alarm.id, "next": nxt.isoformat() if nxt else None}
+            {
+                "alarm_id": updated[0].id,
+                "alarm_ids": [a.id for a in updated],
+                "next": min(nexts).isoformat() if nexts else None,
+            }
         )
 
 
@@ -624,6 +834,33 @@ class DismissIntent(_VoiceAlarmIntent):
 def _describe_session(session: RingSession) -> str:
     state = " (paused)" if session.state == STATE_PAUSED else ""
     return f"the {session.kind} '{session.label}' on {session.target.display}{state}"
+
+
+def _alarm_summary(alarm: Alarm, now: datetime) -> dict[str, Any]:
+    """Compact alarm record for tool responses (the LLM sees speech slots too)."""
+    nxt = alarm.next_pending(now)
+    return {
+        "alarm_id": alarm.id,
+        "label": alarm.label,
+        "kind": alarm.kind,
+        "target": alarm.target,
+        "time": alarm.time.strftime("%H:%M"),
+        "repeats": format_days(alarm.weekdays) if alarm.is_recurring else "once",
+        "date": alarm.date.isoformat() if alarm.date else None,
+        "next": nxt.isoformat() if nxt else None,
+        "enabled": alarm.enabled,
+    }
+
+
+def _next_ring(alarm: Alarm, now: datetime) -> datetime | None:
+    """The alarm's very next scheduled ring, skipped or not."""
+    return alarm.next_scheduled(max(now, alarm.pending_after()))
+
+
+def _next_ring_day(alarm: Alarm, now: datetime) -> date:
+    """Local date of the very next ring (far future if there is none)."""
+    nxt = _next_ring(alarm, now)
+    return dt_util.as_local(nxt).date() if nxt is not None else date.max
 
 
 @callback
