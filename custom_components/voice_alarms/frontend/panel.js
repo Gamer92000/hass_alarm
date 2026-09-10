@@ -19,15 +19,226 @@ const ICONS = {
 };
 
 const DAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
-const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// UI text. The language follows the user's Home Assistant profile (hass.locale); anything
+// missing in a language falls back to English. Dates and weekday abbreviations come from
+// Intl for the same locale.
+const STRINGS = {
+  en: {
+    add_alarm: "Add alarm",
+    add_reminder: "Add reminder",
+    loading: "Loading…",
+    not_loaded: "Voice Alarms is not loaded",
+    alarm: "Alarm",
+    reminder: "Reminder",
+    ringing_on: "{kind} ringing on {target}",
+    paused_on: "{kind} paused on {target}",
+    snooze5: "Snooze 5 min",
+    dismiss: "Dismiss",
+    alarms: "Alarms",
+    reminders: "Reminders",
+    no_alarms: "No alarms yet. Add one here or say “set an alarm for 7” to a satellite.",
+    no_reminders: "No reminders yet. Add one here or say “remind me at 6 to take out the trash” to a satellite.",
+    satellites: "Satellites",
+    no_satellites: "No assist satellites found. Add a Voice PE / Wyoming satellite first.",
+    volume_via: "volume via {player}",
+    no_media_player: "no media player (volume not controlled)",
+    next: "Next: {label} {when}",
+    no_upcoming: "No upcoming alarm",
+    test: "Test",
+    settings: "Settings",
+    volume_ramp: "Volume ramp",
+    edit_ramp: "Edit ramp",
+    ring_duration: "Ring duration {seconds}s",
+    satellite_volume: "satellite volume {percent}%",
+    satellite_volume_unchanged: "satellite volume unchanged",
+    sound: "sound: {sound}",
+    built_in: "built-in",
+    ffmpeg_missing: " (ffmpeg missing: no ramp)",
+    change_hint: "Change these under Settings → Devices &amp; services → Voice Alarms → Configure.",
+    preview_label: "Built-in sound preview:",
+    disabled: "Disabled",
+    next_skipped: "Next occurrence skipped",
+    in_past: "In the past",
+    unknown_satellite: "Unknown satellite",
+    once: "once",
+    enabled: "Enabled",
+    reinstate_next: "Reinstate next occurrence",
+    skip_next: "Skip next occurrence",
+    edit: "Edit",
+    delete: "Delete",
+    confirm_delete: "Delete “{label}”?",
+    ramp_help:
+      "Drag the round handles to shape the curve and the knob on the left axis to set the start level. The ramp is baked into the alarm audio, so it works on every satellite.",
+    ramp_seconds: "Ramp-up time (seconds)",
+    ramp_start: "Start level (%)",
+    preview_play: "Preview with the built-in sound",
+    stop: "Stop",
+    cancel: "Cancel",
+    save: "Save",
+    create: "Create",
+    no_web_audio: "This browser has no Web Audio support.",
+    preview_failed: "Preview failed: {error}",
+    no_ramp: "No ramp: full volume from the start",
+    ramp_summary: "From {start}% to 100% over {seconds} · {curve} curve",
+    custom: "custom",
+    preset_linear: "Linear",
+    preset_ease_in: "Ease in",
+    preset_ease_out: "Ease out",
+    preset_ease_in_out: "Ease in-out",
+    type: "Type",
+    alarm_rings: "Alarm (rings)",
+    reminder_spoken: "Reminder (spoken)",
+    time: "Time",
+    name: "Name",
+    name_placeholder: "e.g. Work",
+    message: "Message to speak",
+    message_placeholder: "Take out the trash",
+    satellite_required: "Satellite (required)",
+    choose: "— choose —",
+    one_time: "One time",
+    repeat_weekly: "Repeat weekly",
+    date: "Date",
+    days: "Days",
+    duration_minutes: "Ring duration (minutes, empty = default)",
+    custom_sound: "Custom sound (URL / media-source id)",
+    edit_alarm: "Edit alarm",
+    new_alarm: "New alarm",
+    edit_reminder: "Edit reminder",
+    new_reminder: "New reminder",
+    choose_satellite: "Choose a satellite.",
+    pick_weekday: "Pick at least one weekday.",
+    reminder_needs_message: "A reminder needs a message.",
+    every_day: "Every day",
+    weekdays: "Weekdays",
+    weekends: "Weekends",
+    rel_under_minute: "in less than a minute",
+    rel_min: "in {m} min",
+    rel_h: "in {h} h",
+    rel_h_min: "in {h} h {m} min",
+    rel_d_h: "in {d} d {h} h",
+    today: "today",
+    tomorrow: "tomorrow",
+  },
+  de: {
+    add_alarm: "Wecker hinzufügen",
+    add_reminder: "Erinnerung hinzufügen",
+    loading: "Lädt…",
+    not_loaded: "Voice Alarms ist nicht geladen",
+    alarm: "Wecker",
+    reminder: "Erinnerung",
+    ringing_on: "{kind} klingelt auf {target}",
+    paused_on: "{kind} pausiert auf {target}",
+    snooze5: "5 Min. schlummern",
+    dismiss: "Beenden",
+    alarms: "Wecker",
+    reminders: "Erinnerungen",
+    no_alarms: "Noch keine Wecker. Lege hier einen an oder sage „Stell einen Wecker auf 7“ zu einem Satelliten.",
+    no_reminders: "Noch keine Erinnerungen. Lege hier eine an oder sage „Erinnere mich um 6, den Müll rauszubringen“ zu einem Satelliten.",
+    satellites: "Satelliten",
+    no_satellites: "Keine Assist-Satelliten gefunden. Richte zuerst einen Voice-PE- oder Wyoming-Satelliten ein.",
+    volume_via: "Lautstärke über {player}",
+    no_media_player: "kein Media Player (Lautstärke wird nicht gesteuert)",
+    next: "Nächster: {label} {when}",
+    no_upcoming: "Kein anstehender Wecker",
+    test: "Testen",
+    settings: "Einstellungen",
+    volume_ramp: "Lautstärkerampe",
+    edit_ramp: "Rampe bearbeiten",
+    ring_duration: "Klingeldauer {seconds}s",
+    satellite_volume: "Satellitenlautstärke {percent}%",
+    satellite_volume_unchanged: "Satellitenlautstärke unverändert",
+    sound: "Ton: {sound}",
+    built_in: "eingebaut",
+    ffmpeg_missing: " (ffmpeg fehlt: keine Rampe)",
+    change_hint: "Ändern unter Einstellungen → Geräte &amp; Dienste → Voice Alarms → Konfigurieren.",
+    preview_label: "Vorschau des eingebauten Tons:",
+    disabled: "Deaktiviert",
+    next_skipped: "Nächster Termin übersprungen",
+    in_past: "In der Vergangenheit",
+    unknown_satellite: "Unbekannter Satellit",
+    once: "einmalig",
+    enabled: "Aktiviert",
+    reinstate_next: "Nächsten Termin wiederherstellen",
+    skip_next: "Nächsten Termin überspringen",
+    edit: "Bearbeiten",
+    delete: "Löschen",
+    confirm_delete: "„{label}“ löschen?",
+    ramp_help:
+      "Ziehe die runden Griffe, um die Kurve zu formen, und den Knopf an der linken Achse, um den Startpegel zu setzen. Die Rampe wird in das Weck-Audio eingerechnet und funktioniert daher auf jedem Satelliten.",
+    ramp_seconds: "Anstiegszeit (Sekunden)",
+    ramp_start: "Startpegel (%)",
+    preview_play: "Vorschau mit dem eingebauten Ton",
+    stop: "Stopp",
+    cancel: "Abbrechen",
+    save: "Speichern",
+    create: "Erstellen",
+    no_web_audio: "Dieser Browser unterstützt kein Web Audio.",
+    preview_failed: "Vorschau fehlgeschlagen: {error}",
+    no_ramp: "Keine Rampe: volle Lautstärke von Anfang an",
+    ramp_summary: "Von {start}% auf 100% in {seconds} · Kurve: {curve}",
+    custom: "eigene",
+    preset_linear: "Linear",
+    preset_ease_in: "Ease-in",
+    preset_ease_out: "Ease-out",
+    preset_ease_in_out: "Ease-in-out",
+    type: "Art",
+    alarm_rings: "Wecker (klingelt)",
+    reminder_spoken: "Erinnerung (gesprochen)",
+    time: "Uhrzeit",
+    name: "Name",
+    name_placeholder: "z. B. Arbeit",
+    message: "Zu sprechende Nachricht",
+    message_placeholder: "Müll rausbringen",
+    satellite_required: "Satellit (erforderlich)",
+    choose: "— auswählen —",
+    one_time: "Einmalig",
+    repeat_weekly: "Wöchentlich wiederholen",
+    date: "Datum",
+    days: "Tage",
+    duration_minutes: "Klingeldauer (Minuten, leer = Standard)",
+    custom_sound: "Eigener Ton (URL / media-source-ID)",
+    edit_alarm: "Wecker bearbeiten",
+    new_alarm: "Neuer Wecker",
+    edit_reminder: "Erinnerung bearbeiten",
+    new_reminder: "Neue Erinnerung",
+    choose_satellite: "Wähle einen Satelliten.",
+    pick_weekday: "Wähle mindestens einen Wochentag.",
+    reminder_needs_message: "Eine Erinnerung braucht eine Nachricht.",
+    every_day: "Täglich",
+    weekdays: "Wochentags",
+    weekends: "Am Wochenende",
+    rel_under_minute: "in weniger als einer Minute",
+    rel_min: "in {m} Min.",
+    rel_h: "in {h} Std.",
+    rel_h_min: "in {h} Std. {m} Min.",
+    rel_d_h: "in {d} T. {h} Std.",
+    today: "heute",
+    tomorrow: "morgen",
+  },
+};
+let LANG = "en";
+let LOCALE = "en";
+const t = (key, params) => {
+  let text = STRINGS[LANG]?.[key] ?? STRINGS.en[key] ?? key;
+  if (params) for (const [k, v] of Object.entries(params)) text = text.replaceAll(`{${k}}`, v);
+  return text;
+};
+function setLanguage(locale) {
+  LOCALE = locale || "en";
+  const code = LOCALE.toLowerCase().split(/[-_]/)[0];
+  LANG = code in STRINGS ? code : "en";
+}
+// Abbreviated weekday names for the locale (2024-01-01 was a Monday).
+const dayShort = (i) => new Date(2024, 0, 1 + i).toLocaleDateString(LOCALE, { weekday: "short" });
 
 // Volume ramp: the gain rises from the start level to 100% over ramp_seconds along
 // a CSS style cubic-bezier(x1, y1, x2, y2) easing (same maths as audio.py).
 const RAMP_PRESETS = [
-  ["Linear", [0, 0, 1, 1]],
-  ["Ease in", [0.42, 0, 1, 1]],
-  ["Ease out", [0, 0, 0.58, 1]],
-  ["Ease in-out", [0.42, 0, 0.58, 1]],
+  ["linear", [0, 0, 1, 1]],
+  ["ease_in", [0.42, 0, 1, 1]],
+  ["ease_out", [0, 0, 0.58, 1]],
+  ["ease_in_out", [0.42, 0, 0.58, 1]],
 ];
 const DEFAULT_RAMP_CURVE = RAMP_PRESETS[3][1];
 // Ramp graph geometry in SVG user units: the plot area sits inside the paddings.
@@ -89,9 +300,14 @@ function formatSeconds(s) {
 }
 
 function rampSummary(ramp) {
-  if (ramp.seconds <= 0) return "No ramp: full volume from the start";
+  if (ramp.seconds <= 0) return t("no_ramp");
   const name = presetName(ramp.curve);
-  return `From ${Math.round(ramp.start * 100)}% to 100% over ${formatSeconds(ramp.seconds)} · ${name ? name.toLowerCase() : "custom"} curve`;
+  const curve = name ? t(`preset_${name}`) : t("custom");
+  return t("ramp_summary", {
+    start: Math.round(ramp.start * 100),
+    seconds: formatSeconds(ramp.seconds),
+    curve: LANG === "en" ? curve.toLowerCase() : curve,
+  });
 }
 
 function rampPoints(ramp) {
@@ -227,10 +443,10 @@ const icon = (name) => `<svg viewBox="0 0 24 24"><path d="${ICONS[name]}"/></svg
 
 function formatDays(days) {
   const set = new Set(days);
-  if (set.size === 7) return "Every day";
-  if (set.size === 5 && [0, 1, 2, 3, 4].every((d) => set.has(d))) return "Weekdays";
-  if (set.size === 2 && set.has(5) && set.has(6)) return "Weekends";
-  return days.map((d) => DAY_SHORT[d]).join(", ");
+  if (set.size === 7) return t("every_day");
+  if (set.size === 5 && [0, 1, 2, 3, 4].every((d) => set.has(d))) return t("weekdays");
+  if (set.size === 2 && set.has(5) && set.has(6)) return t("weekends");
+  return days.map((d) => dayShort(d)).join(", ");
 }
 
 function formatDate(iso, locale) {
@@ -243,19 +459,19 @@ function formatNext(iso, now, locale) {
   const target = new Date(iso);
   const diff = (target - now) / 1000;
   let rel;
-  if (diff < 60) rel = "in less than a minute";
-  else if (diff < 3600) rel = `in ${Math.round(diff / 60)} min`;
+  if (diff < 60) rel = t("rel_under_minute");
+  else if (diff < 3600) rel = t("rel_min", { m: Math.round(diff / 60) });
   else if (diff < 86400) {
     const h = Math.floor(diff / 3600);
     const m = Math.round((diff % 3600) / 60);
-    rel = `in ${h} h${m ? ` ${m} min` : ""}`;
-  } else rel = `in ${Math.floor(diff / 86400)} d ${Math.round((diff % 86400) / 3600)} h`;
+    rel = m ? t("rel_h_min", { h, m }) : t("rel_h", { h });
+  } else rel = t("rel_d_h", { d: Math.floor(diff / 86400), h: Math.round((diff % 86400) / 3600) });
   const sameDay = target.toDateString() === now.toDateString();
   const tomorrow = new Date(now);
   tomorrow.setDate(now.getDate() + 1);
   let when;
-  if (sameDay) when = "today";
-  else if (target.toDateString() === tomorrow.toDateString()) when = "tomorrow";
+  if (sameDay) when = t("today");
+  else if (target.toDateString() === tomorrow.toDateString()) when = t("tomorrow");
   else when = target.toLocaleDateString(locale, { weekday: "short", day: "numeric", month: "short" });
   return `${when} ${target.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" })} · ${rel}`;
 }
@@ -276,6 +492,11 @@ class VoiceAlarmsPanel extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
+    const locale = hass?.locale?.language || hass?.language || navigator.language;
+    if (locale !== LOCALE) {
+      setLanguage(locale);
+      if (!first) this._render();
+    }
     if (first) this._subscribe();
   }
   get hass() {
@@ -309,13 +530,13 @@ class VoiceAlarmsPanel extends HTMLElement {
       { type: "voice_alarms/subscribe" }
     );
     this._unsub.catch((err) => {
-      this._error = err.message || "Voice Alarms is not loaded";
+      this._error = err.message || t("not_loaded");
       this._render();
     });
   }
 
   get _locale() {
-    return this._hass?.locale?.language || navigator.language;
+    return LOCALE;
   }
 
   _target(id) {
@@ -328,55 +549,55 @@ class VoiceAlarmsPanel extends HTMLElement {
     const now = new Date();
     const parts = [];
     parts.push(`<div class="toolbar">${icon("alarm")}<h1>Voice Alarms</h1>
-      <button data-action="add" data-kind="alarm">${icon("plus")} Add alarm</button>
-      <button data-action="add" data-kind="reminder">${icon("plus")} Add reminder</button></div><main>`);
+      <button data-action="add" data-kind="alarm">${icon("plus")} ${t("add_alarm")}</button>
+      <button data-action="add" data-kind="reminder">${icon("plus")} ${t("add_reminder")}</button></div><main>`);
     if (this._error) parts.push(`<div class="error">${esc(this._error)}</div>`);
     if (!st) {
-      parts.push(`<div class="empty">Loading…</div></main>`);
+      parts.push(`<div class="empty">${t("loading")}</div></main>`);
       app.innerHTML = parts.join("");
       return;
     }
     for (const s of st.ringing) {
       parts.push(`<div class="card ringing"><div class="row">${icon("bell")}
-        <div class="grow"><div class="label">${esc(s.kind === "reminder" ? "Reminder" : "Alarm")} ${s.state === "paused" ? "paused" : "ringing"} on ${esc(s.target_name)}</div>
+        <div class="grow"><div class="label">${esc(t(s.state === "paused" ? "paused_on" : "ringing_on", { kind: t(s.kind === "reminder" ? "reminder" : "alarm"), target: s.target_name }))}</div>
         <div class="sub">${esc(s.label)}${s.message ? " — " + esc(s.message) : ""}</div></div>
-        <div class="actions"><button class="ghost" data-action="snooze" data-target="${esc(s.target)}">Snooze 5 min</button>
-        <button class="danger" data-action="dismiss" data-target="${esc(s.target)}">${icon("stop")} Dismiss</button></div></div></div>`);
+        <div class="actions"><button class="ghost" data-action="snooze" data-target="${esc(s.target)}">${t("snooze5")}</button>
+        <button class="danger" data-action="dismiss" data-target="${esc(s.target)}">${icon("stop")} ${t("dismiss")}</button></div></div></div>`);
     }
     const alarms = st.alarms.filter((a) => a.kind !== "reminder");
     const reminders = st.alarms.filter((a) => a.kind === "reminder");
-    parts.push(`<h2>Alarms</h2>`);
+    parts.push(`<h2>${t("alarms")}</h2>`);
     if (!alarms.length) {
-      parts.push(`<div class="card empty">No alarms yet. Add one here or say “set an alarm for 7” to a satellite.</div>`);
+      parts.push(`<div class="card empty">${t("no_alarms")}</div>`);
     }
     for (const a of alarms) parts.push(this._renderAlarm(a, now));
-    parts.push(`<h2>Reminders</h2>`);
+    parts.push(`<h2>${t("reminders")}</h2>`);
     if (!reminders.length) {
-      parts.push(`<div class="card empty">No reminders yet. Add one here or say “remind me at 6 to take out the trash” to a satellite.</div>`);
+      parts.push(`<div class="card empty">${t("no_reminders")}</div>`);
     }
     for (const a of reminders) parts.push(this._renderAlarm(a, now));
-    parts.push(`<h2>Satellites</h2><div class="card">`);
-    if (!st.targets.length) parts.push(`<div class="note">No assist satellites found. Add a Voice PE / Wyoming satellite first.</div>`);
-    for (const t of st.targets) {
-      const next = st.alarms.filter((a) => a.target === t.entity_id && a.enabled && a.next).sort((x, y) => x.next.localeCompare(y.next))[0];
-      const ringing = st.ringing.find((s) => s.target === t.entity_id);
-      parts.push(`<div class="sat">${icon("speaker")}<div class="grow"><div class="label">${esc(t.display)}</div>
-        <div class="sub">${esc(t.entity_id)}${t.media_player ? " · volume via " + esc(t.media_player) : " · no media player (volume not controlled)"}</div>
-        <div class="sub">${next ? "Next: " + esc(next.label) + " " + esc(formatNext(next.next, now, this._locale)) : "No upcoming alarm"}</div></div>
-        <div class="actions">${ringing ? `<button class="danger" data-action="dismiss" data-target="${esc(t.entity_id)}">${icon("stop")} Dismiss</button>` : `<button class="ghost" data-action="test" data-target="${esc(t.entity_id)}">${icon("play")} Test</button>`}</div></div>`);
+    parts.push(`<h2>${t("satellites")}</h2><div class="card">`);
+    if (!st.targets.length) parts.push(`<div class="note">${t("no_satellites")}</div>`);
+    for (const sat of st.targets) {
+      const next = st.alarms.filter((a) => a.target === sat.entity_id && a.enabled && a.next).sort((x, y) => x.next.localeCompare(y.next))[0];
+      const ringing = st.ringing.find((s) => s.target === sat.entity_id);
+      parts.push(`<div class="sat">${icon("speaker")}<div class="grow"><div class="label">${esc(sat.display)}</div>
+        <div class="sub">${esc(sat.entity_id)} · ${sat.media_player ? esc(t("volume_via", { player: sat.media_player })) : t("no_media_player")}</div>
+        <div class="sub">${next ? esc(t("next", { label: next.label, when: formatNext(next.next, now, this._locale) })) : t("no_upcoming")}</div></div>
+        <div class="actions">${ringing ? `<button class="danger" data-action="dismiss" data-target="${esc(sat.entity_id)}">${icon("stop")} ${t("dismiss")}</button>` : `<button class="ghost" data-action="test" data-target="${esc(sat.entity_id)}">${icon("play")} ${t("test")}</button>`}</div></div>`);
     }
     const ramp = rampFromConfig(st.config);
     const admin = !!this._hass?.user?.is_admin;
-    parts.push(`</div><h2>Settings</h2><div class="card">
-      <div class="row"><div class="grow"><div class="label">Volume ramp</div><div class="sub">${esc(rampSummary(ramp))}</div></div>
-        ${admin ? `<div class="actions"><button class="ghost" data-action="ramp">${icon("edit")} Edit ramp</button></div>` : ""}</div>
+    parts.push(`</div><h2>${t("settings")}</h2><div class="card">
+      <div class="row"><div class="grow"><div class="label">${t("volume_ramp")}</div><div class="sub">${esc(rampSummary(ramp))}</div></div>
+        ${admin ? `<div class="actions"><button class="ghost" data-action="ramp">${icon("edit")} ${t("edit_ramp")}</button></div>` : ""}</div>
       <div class="ramp-preview">${rampSvg(ramp, false)}</div>
       <div class="note">
-      Ring duration ${st.config.default_duration}s ·
-      ${st.config.alarm_volume != null ? "satellite volume " + Math.round(st.config.alarm_volume * 100) + "%" : "satellite volume unchanged"} ·
-      sound: ${st.config.default_sound ? esc(st.config.default_sound) : "built-in"}${st.config.default_sound && !st.config.ffmpeg ? " (ffmpeg missing: no ramp)" : ""}.
-      Change these under Settings → Devices &amp; services → Voice Alarms → Configure.</div>
-      <div class="note" style="margin-top:8px">Built-in sound preview:</div>
+      ${t("ring_duration", { seconds: st.config.default_duration })} ·
+      ${st.config.alarm_volume != null ? t("satellite_volume", { percent: Math.round(st.config.alarm_volume * 100) }) : t("satellite_volume_unchanged")} ·
+      ${t("sound", { sound: st.config.default_sound ? esc(st.config.default_sound) : t("built_in") })}${st.config.default_sound && !st.config.ffmpeg ? t("ffmpeg_missing") : ""}.
+      ${t("change_hint")}</div>
+      <div class="note" style="margin-top:8px">${t("preview_label")}</div>
       <audio controls preload="none" src="/api/voice_alarms/sound/default.wav"></audio></div></main>`);
     app.innerHTML = parts.join("");
   }
@@ -385,11 +606,11 @@ class VoiceAlarmsPanel extends HTMLElement {
     const target = this._target(a.target);
     const reminder = a.kind === "reminder";
     const badges = [];
-    if (!a.enabled) badges.push(`<span class="badge">Disabled</span>`);
-    if (a.next_skipped) badges.push(`<span class="badge warn">Next occurrence skipped</span>`);
-    if (a.enabled && !a.next) badges.push(`<span class="badge err">In the past</span>`);
-    if (!target) badges.push(`<span class="badge err">Unknown satellite</span>`);
-    const schedule = a.is_recurring ? formatDays(a.weekdays) : a.date ? formatDate(a.date, this._locale) : "once";
+    if (!a.enabled) badges.push(`<span class="badge">${t("disabled")}</span>`);
+    if (a.next_skipped) badges.push(`<span class="badge warn">${t("next_skipped")}</span>`);
+    if (a.enabled && !a.next) badges.push(`<span class="badge err">${t("in_past")}</span>`);
+    if (!target) badges.push(`<span class="badge err">${t("unknown_satellite")}</span>`);
+    const schedule = a.is_recurring ? formatDays(a.weekdays) : a.date ? formatDate(a.date, this._locale) : t("once");
     const message = a.message && a.message !== a.label ? `<div class="message">“${esc(a.message)}”</div>` : "";
     return `<div class="card ${reminder ? "reminder" : ""} ${a.enabled ? "" : "disabled"}"><div class="row">
       <div class="time">${esc(a.time)}</div>
@@ -398,10 +619,10 @@ class VoiceAlarmsPanel extends HTMLElement {
         <div class="sub">${a.enabled ? esc(formatNext(a.next, now, this._locale)) : ""}</div>
         <div class="badges">${badges.join("")}</div></div>
       <div class="actions">
-        <label class="switch" title="Enabled"><input type="checkbox" data-action="toggle" data-id="${esc(a.id)}" ${a.enabled ? "checked" : ""}><span></span></label>
-        ${a.is_recurring ? `<button class="icon" title="${a.next_skipped ? "Reinstate next occurrence" : "Skip next occurrence"}" data-action="${a.next_skipped ? "unskip" : "skip"}" data-id="${esc(a.id)}">${icon(a.next_skipped ? "undo" : "skip")}</button>` : ""}
-        <button class="icon" title="Edit" data-action="edit" data-id="${esc(a.id)}">${icon("edit")}</button>
-        <button class="icon" title="Delete" data-action="delete" data-id="${esc(a.id)}">${icon("del")}</button>
+        <label class="switch" title="${t("enabled")}"><input type="checkbox" data-action="toggle" data-id="${esc(a.id)}" ${a.enabled ? "checked" : ""}><span></span></label>
+        ${a.is_recurring ? `<button class="icon" title="${t(a.next_skipped ? "reinstate_next" : "skip_next")}" data-action="${a.next_skipped ? "unskip" : "skip"}" data-id="${esc(a.id)}">${icon(a.next_skipped ? "undo" : "skip")}</button>` : ""}
+        <button class="icon" title="${t("edit")}" data-action="edit" data-id="${esc(a.id)}">${icon("edit")}</button>
+        <button class="icon" title="${t("delete")}" data-action="delete" data-id="${esc(a.id)}">${icon("del")}</button>
       </div></div></div>`;
   }
 
@@ -429,7 +650,7 @@ class VoiceAlarmsPanel extends HTMLElement {
         this._openEditor(alarm);
         break;
       case "delete":
-        if (confirm(`Delete “${alarm.label}”?`)) await this._call("delete_alarm", { alarm_id: id }).catch(() => {});
+        if (confirm(t("confirm_delete", { label: alarm.label }))) await this._call("delete_alarm", { alarm_id: id }).catch(() => {});
         break;
       case "skip":
         await this._call("skip_next", { alarm_id: id }).catch(() => {});
@@ -464,17 +685,17 @@ class VoiceAlarmsPanel extends HTMLElement {
     const dialog = this.shadowRoot.getElementById("ramp");
     const ramp = rampFromConfig(this._state.config);
     dialog.innerHTML = `<form method="dialog">
-      <h3>Volume ramp</h3>
-      <div class="note">Drag the round handles to shape the curve and the knob on the left axis to set the start level. The ramp is baked into the alarm audio, so it works on every satellite.</div>
+      <h3>${t("volume_ramp")}</h3>
+      <div class="note">${t("ramp_help")}</div>
       ${rampSvg(ramp, true)}
-      <div class="presets">${RAMP_PRESETS.map(([name]) => `<button type="button" data-preset="${esc(name)}">${esc(name)}</button>`).join("")}<span class="note" id="ramp-curve"></span></div>
+      <div class="presets">${RAMP_PRESETS.map(([name]) => `<button type="button" data-preset="${esc(name)}">${esc(t(`preset_${name}`))}</button>`).join("")}<span class="note" id="ramp-curve"></span></div>
       <div class="two">
-        <label class="field">Ramp-up time (seconds)<input type="number" name="seconds" min="0" max="300" step="1" value="${ramp.seconds}"></label>
-        <label class="field">Start level (%)<input type="number" name="start" min="0" max="100" step="1" value="${Math.round(ramp.start * 100)}"></label>
+        <label class="field">${t("ramp_seconds")}<input type="number" name="seconds" min="0" max="300" step="1" value="${ramp.seconds}"></label>
+        <label class="field">${t("ramp_start")}<input type="number" name="start" min="0" max="100" step="1" value="${Math.round(ramp.start * 100)}"></label>
       </div>
-      <div class="row"><button type="button" class="ghost" id="ramp-play">${icon("play")} Preview with the built-in sound</button><span class="note" id="ramp-time"></span></div>
+      <div class="row"><button type="button" class="ghost" id="ramp-play">${icon("play")} ${t("preview_play")}</button><span class="note" id="ramp-time"></span></div>
       <div class="error" id="ramp-error"></div>
-      <div class="buttons"><button type="button" class="ghost" data-close>Cancel</button><button type="submit">Save</button></div>
+      <div class="buttons"><button type="button" class="ghost" data-close>${t("cancel")}</button><button type="submit">${t("save")}</button></div>
     </form>`;
     const form = dialog.querySelector("form");
     const svg = dialog.querySelector("svg");
@@ -516,8 +737,8 @@ class VoiceAlarmsPanel extends HTMLElement {
       for (const b of dialog.querySelectorAll("[data-preset]")) b.classList.toggle("active", b.dataset.preset === name);
       curveInfo.textContent =
         ramp.seconds <= 0
-          ? "No ramp: full volume from the start"
-          : `cubic-bezier(${ramp.curve.map((v) => Math.round(v * 100) / 100).join(", ")})${name ? "" : " · custom"}`;
+          ? t("no_ramp")
+          : `cubic-bezier(${ramp.curve.map((v) => Math.round(v * 100) / 100).join(", ")})${name ? "" : ` · ${t("custom")}`}`;
     };
     update();
 
@@ -579,12 +800,12 @@ class VoiceAlarmsPanel extends HTMLElement {
       preview = null;
       playhead.style.display = "none";
       timeInfo.textContent = "";
-      playButton.innerHTML = `${icon("play")} Preview with the built-in sound`;
+      playButton.innerHTML = `${icon("play")} ${t("preview_play")}`;
     };
     const startPreview = async () => {
       const Context = window.AudioContext || window.webkitAudioContext;
       if (!Context) {
-        errorEl.textContent = "This browser has no Web Audio support.";
+        errorEl.textContent = t("no_web_audio");
         return;
       }
       errorEl.textContent = "";
@@ -616,22 +837,22 @@ class VoiceAlarmsPanel extends HTMLElement {
         const total = snapshot.seconds + 3;
         const tick = () => {
           if (!preview) return;
-          const t = context.currentTime - t0;
-          if (t >= total) {
+          const elapsed = context.currentTime - t0;
+          if (elapsed >= total) {
             stopPreview();
             return;
           }
-          const x = graphX(snapshot.seconds > 0 ? clamp(t / snapshot.seconds, 0, 1) : 1);
+          const x = graphX(snapshot.seconds > 0 ? clamp(elapsed / snapshot.seconds, 0, 1) : 1);
           playhead.setAttribute("x1", x);
           playhead.setAttribute("x2", x);
           playhead.style.display = "";
-          timeInfo.textContent = `${Math.max(0, t).toFixed(1)} s · ${Math.round(rampGain(snapshot, t) * 100)}%`;
+          timeInfo.textContent = `${Math.max(0, elapsed).toFixed(1)} s · ${Math.round(rampGain(snapshot, elapsed) * 100)}%`;
           preview.frame = requestAnimationFrame(tick);
         };
         tick();
-        playButton.innerHTML = `${icon("stop")} Stop`;
+        playButton.innerHTML = `${icon("stop")} ${t("stop")}`;
       } catch (err) {
-        errorEl.textContent = `Preview failed: ${err?.message || err}`;
+        errorEl.textContent = t("preview_failed", { error: err?.message || err });
         context.close();
       }
       playButton.disabled = false;
@@ -675,33 +896,33 @@ class VoiceAlarmsPanel extends HTMLElement {
     dialog.innerHTML = `<form method="dialog">
       <h3 id="form-title"></h3>
       <div class="two">
-        <label class="field">Type<select name="kind"><option value="alarm" ${a.kind === "alarm" ? "selected" : ""}>Alarm (rings)</option><option value="reminder" ${a.kind === "reminder" ? "selected" : ""}>Reminder (spoken)</option></select></label>
-        <label class="field">Time<input type="time" name="time" required value="${esc(a.time)}"></label>
+        <label class="field">${t("type")}<select name="kind"><option value="alarm" ${a.kind === "alarm" ? "selected" : ""}>${t("alarm_rings")}</option><option value="reminder" ${a.kind === "reminder" ? "selected" : ""}>${t("reminder_spoken")}</option></select></label>
+        <label class="field">${t("time")}<input type="time" name="time" required value="${esc(a.time)}"></label>
       </div>
-      <label class="field">Name<input type="text" name="name" placeholder="e.g. Work" value="${esc(a.name || "")}"></label>
-      <label class="field" data-only="reminder">Message to speak<input type="text" name="message" placeholder="Take out the trash" value="${esc(a.message || "")}"></label>
-      <label class="field">Satellite (required)<select name="target" required><option value="">— choose —</option>${targets
+      <label class="field">${t("name")}<input type="text" name="name" placeholder="${esc(t("name_placeholder"))}" value="${esc(a.name || "")}"></label>
+      <label class="field" data-only="reminder">${t("message")}<input type="text" name="message" placeholder="${esc(t("message_placeholder"))}" value="${esc(a.message || "")}"></label>
+      <label class="field">${t("satellite_required")}<select name="target" required><option value="">${t("choose")}</option>${targets
         .map((t) => `<option value="${esc(t.entity_id)}" ${t.entity_id === a.target ? "selected" : ""}>${esc(t.display)}</option>`)
         .join("")}</select></label>
-      <div class="radios"><label><input type="radio" name="repeat" value="once" ${!a.is_recurring ? "checked" : ""}> One time</label>
-        <label><input type="radio" name="repeat" value="weekly" ${a.is_recurring ? "checked" : ""}> Repeat weekly</label></div>
-      <label class="field" data-only="once">Date<input type="date" name="date" value="${esc(a.date || toIso(tomorrow))}"></label>
-      <div class="field" data-only="weekly"><span>Days</span><div class="days">${DAY_CODES.map(
-        (c, i) => `<label><input type="checkbox" name="wd" value="${c}" ${a.weekdays.includes(i) ? "checked" : ""}>${DAY_SHORT[i]}</label>`
+      <div class="radios"><label><input type="radio" name="repeat" value="once" ${!a.is_recurring ? "checked" : ""}> ${t("one_time")}</label>
+        <label><input type="radio" name="repeat" value="weekly" ${a.is_recurring ? "checked" : ""}> ${t("repeat_weekly")}</label></div>
+      <label class="field" data-only="once">${t("date")}<input type="date" name="date" value="${esc(a.date || toIso(tomorrow))}"></label>
+      <div class="field" data-only="weekly"><span>${t("days")}</span><div class="days">${DAY_CODES.map(
+        (c, i) => `<label><input type="checkbox" name="wd" value="${c}" ${a.weekdays.includes(i) ? "checked" : ""}>${esc(dayShort(i))}</label>`
       ).join("")}</div></div>
       <div class="two" data-only="alarm">
-        <label class="field">Ring duration (minutes, empty = default)<input type="number" name="duration" min="1" max="1440" value="${a.duration ? Math.round(a.duration / 60) : ""}"></label>
-        <label class="field">Custom sound (URL / media-source id)<input type="text" name="sound" value="${esc(a.sound || "")}"></label>
+        <label class="field">${t("duration_minutes")}<input type="number" name="duration" min="1" max="1440" value="${a.duration ? Math.round(a.duration / 60) : ""}"></label>
+        <label class="field">${t("custom_sound")}<input type="text" name="sound" value="${esc(a.sound || "")}"></label>
       </div>
-      <label class="radios"><input type="checkbox" name="enabled" ${a.enabled ? "checked" : ""}> Enabled</label>
+      <label class="radios"><input type="checkbox" name="enabled" ${a.enabled ? "checked" : ""}> ${t("enabled")}</label>
       <div class="error" id="form-error"></div>
-      <div class="buttons"><button type="button" class="ghost" data-close>Cancel</button><button type="submit">${alarm ? "Save" : "Create"}</button></div>
+      <div class="buttons"><button type="button" class="ghost" data-close>${t("cancel")}</button><button type="submit">${t(alarm ? "save" : "create")}</button></div>
     </form>`;
     const form = dialog.querySelector("form");
     const sync = () => {
       const kind = form.kind.value;
       const repeat = form.repeat.value;
-      form.querySelector("#form-title").textContent = `${alarm ? "Edit" : "New"} ${kind}`;
+      form.querySelector("#form-title").textContent = t(`${alarm ? "edit" : "new"}_${kind}`);
       for (const el of form.querySelectorAll("[data-only]")) {
         const only = el.dataset.only;
         el.style.display = only === kind || only === repeat ? "" : "none";
@@ -728,15 +949,15 @@ class VoiceAlarmsPanel extends HTMLElement {
       if (form.duration.value) data.duration = Number(form.duration.value) * 60;
       const errorEl = form.querySelector("#form-error");
       if (!data.target) {
-        errorEl.textContent = "Choose a satellite.";
+        errorEl.textContent = t("choose_satellite");
         return;
       }
       if (repeat === "weekly" && !weekdays.length) {
-        errorEl.textContent = "Pick at least one weekday.";
+        errorEl.textContent = t("pick_weekday");
         return;
       }
       if (data.kind === "reminder" && !data.message) {
-        errorEl.textContent = "A reminder needs a message.";
+        errorEl.textContent = t("reminder_needs_message");
         return;
       }
       try {

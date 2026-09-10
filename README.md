@@ -32,6 +32,8 @@ integration relies on the LLM tools platform introduced in 2026.8 and the curren
   per alarm.
 - Reminders are spoken (text-to-speech) instead of ringing, repeated a few times.
 - Missed alarms (e.g. Home Assistant restarted at alarm time) still ring within a grace period.
+- English and German throughout: panel, config flow, entities, services and the spoken
+  responses.
 
 ## Installation
 
@@ -77,6 +79,13 @@ automatically. No extra configuration is needed. Examples:
 The tool responses are precise sentences such as
 *"Created repeating alarm 'work' at 06:30 weekdays on Kitchen, next tomorrow (Tuesday 8
 September) at 06:30 (in 20 hours and 12 minutes)."* and the LLM is instructed to relay them.
+
+Responses are given in the language of the conversation. English and German are built in;
+any other language gets English, which the LLM translates. The parsers also understand
+German words (*morgen*, *übermorgen*, *wochentags*, *montag*, *7 Uhr*, …). Everything tied
+to the instance rather than to a conversation follows the Home Assistant language setting:
+the default alarm labels ("Wecker 07:00"), the spoken *Erinnerung:* prefix of reminders,
+snooze names and service errors.
 
 The built-in (non-LLM) Assist agent does not have sentences for these intents out of the
 box. You can add your own under `custom_sentences/<lang>/voice_alarms.yaml` targeting the

@@ -1,0 +1,141 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Voice Alarms",
+        "description": "Wecker und Erinnerungen für deine Sprachsatelliten. Alle Einstellungen lassen sich später ändern; die Form der Lautstärkerampe wird im Voice-Alarms-Panel bearbeitet.",
+        "data": {
+          "default_duration": "Klingeldauer",
+          "ramp_seconds": "Dauer der Lautstärkerampe",
+          "ramp_start": "Startpegel der Lautstärkerampe",
+          "alarm_volume": "Lautstärke des Satelliten beim Klingeln (leer lassen, um die aktuelle Lautstärke beizubehalten)",
+          "default_sound": "Weckton (URL oder media-source-ID, leer = eingebauter Ton)",
+          "reminder_repeats": "Wie oft eine Erinnerung gesprochen wird",
+          "reminder_interval": "Pause zwischen den Wiederholungen einer Erinnerung",
+          "missed_grace": "Verpassten Wecker trotzdem klingeln lassen, wenn er höchstens so lange her ist",
+          "device_stop_pause": "Wenn der Wecker am Gerät selbst gestoppt wird, nach dieser Zeit weiterklingeln (0 = als beendet behandeln)"
+        }
+      }
+    },
+    "error": {
+      "invalid_sound": "Verwende eine http(s)-URL, einen Pfad, der mit / beginnt, oder eine media-source://-ID."
+    },
+    "abort": {
+      "single_instance_allowed": "Voice Alarms ist bereits eingerichtet.",
+      "already_configured": "Voice Alarms ist bereits eingerichtet."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Voice-Alarms-Einstellungen",
+        "description": "Die Form der Lautstärkerampe (mit Vorschau) wird im Voice-Alarms-Panel in der Seitenleiste bearbeitet.",
+        "data": {
+          "default_duration": "Klingeldauer",
+          "ramp_seconds": "Dauer der Lautstärkerampe",
+          "ramp_start": "Startpegel der Lautstärkerampe",
+          "alarm_volume": "Lautstärke des Satelliten beim Klingeln (leer lassen, um die aktuelle Lautstärke beizubehalten)",
+          "default_sound": "Weckton (URL oder media-source-ID, leer = eingebauter Ton)",
+          "reminder_repeats": "Wie oft eine Erinnerung gesprochen wird",
+          "reminder_interval": "Pause zwischen den Wiederholungen einer Erinnerung",
+          "missed_grace": "Verpassten Wecker trotzdem klingeln lassen, wenn er höchstens so lange her ist",
+          "device_stop_pause": "Wenn der Wecker am Gerät selbst gestoppt wird, nach dieser Zeit weiterklingeln (0 = als beendet behandeln)"
+        }
+      }
+    },
+    "error": {
+      "invalid_sound": "Verwende eine http(s)-URL, einen Pfad, der mit / beginnt, oder eine media-source://-ID."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "next_alarm": { "name": "Nächster Wecker" }
+    },
+    "binary_sensor": {
+      "ringing": { "name": "Klingelt" }
+    },
+    "button": {
+      "dismiss": { "name": "Wecker beenden" },
+      "test": { "name": "Weckton testen" }
+    }
+  },
+  "services": {
+    "add_alarm": {
+      "name": "Wecker hinzufügen",
+      "description": "Erstellt einen Wecker oder eine Erinnerung auf einem Sprachsatelliten.",
+      "fields": {
+        "target": { "name": "Satellit", "description": "Der Assist-Satellit, auf dem der Wecker klingelt." },
+        "time": { "name": "Uhrzeit", "description": "Uhrzeit im 24-Stunden-Format, z. B. 06:30." },
+        "date": { "name": "Datum", "description": "Datum für einen einmaligen Wecker (JJJJ-MM-TT, today, tomorrow, Wochentagsname). Wird ignoriert, wenn Wochentage gesetzt sind." },
+        "weekdays": { "name": "Wiederholen am", "description": "Wochentage (mon..sun) für einen wiederkehrenden Wecker. Leer lassen für einen einmaligen Wecker." },
+        "name": { "name": "Name", "description": "Bezeichnung des Weckers." },
+        "message": { "name": "Nachricht", "description": "Zu sprechender Text. Macht daraus eine Erinnerung statt eines Weckers." },
+        "kind": { "name": "Art", "description": "alarm oder reminder (wird aus der Nachricht abgeleitet, wenn nicht angegeben)." },
+        "duration": { "name": "Klingeldauer", "description": "Sekunden, die der Weckton spielt. Standard ist die Einstellung der Integration." },
+        "sound": { "name": "Ton", "description": "URL oder media-source-ID eines eigenen Tons für diesen Wecker." },
+        "enabled": { "name": "Aktiviert", "description": "Ob der Wecker aktiv ist." }
+      }
+    },
+    "update_alarm": {
+      "name": "Wecker ändern",
+      "description": "Ändert einen bestehenden Wecker.",
+      "fields": {
+        "alarm_id": { "name": "Wecker-ID", "description": "ID des Weckers." },
+        "target": { "name": "Satellit", "description": "Verschiebt den Wecker auf diesen Satelliten." },
+        "time": { "name": "Uhrzeit", "description": "Neue Uhrzeit (HH:MM)." },
+        "date": { "name": "Datum", "description": "Neues Datum für einen einmaligen Wecker." },
+        "weekdays": { "name": "Wiederholen am", "description": "Neue Wochentage; eine leere Liste macht ihn einmalig." },
+        "name": { "name": "Name", "description": "Neue Bezeichnung." },
+        "message": { "name": "Nachricht", "description": "Neuer Erinnerungstext." },
+        "kind": { "name": "Art", "description": "alarm oder reminder." },
+        "duration": { "name": "Klingeldauer", "description": "Sekunden, die der Weckton spielt." },
+        "sound": { "name": "Ton", "description": "Eigener Ton für diesen Wecker." },
+        "enabled": { "name": "Aktiviert", "description": "Wecker aktivieren oder deaktivieren." }
+      }
+    },
+    "delete_alarm": {
+      "name": "Wecker löschen",
+      "description": "Löscht einen Wecker.",
+      "fields": {
+        "alarm_id": { "name": "Wecker-ID", "description": "ID des Weckers." }
+      }
+    },
+    "skip_next": {
+      "name": "Nächsten Termin überspringen",
+      "description": "Überspringt nur den nächsten Termin eines wiederkehrenden Weckers (oder stellt ihn wieder her).",
+      "fields": {
+        "alarm_id": { "name": "Wecker-ID", "description": "ID des Weckers." },
+        "undo": { "name": "Rückgängig", "description": "Stellt den übersprungenen Termin wieder her." }
+      }
+    },
+    "dismiss": {
+      "name": "Beenden",
+      "description": "Stoppt einen klingelnden Wecker oder eine Erinnerung.",
+      "fields": {
+        "target": { "name": "Satellit", "description": "Nur den Wecker auf diesem Satelliten stoppen. Leer lassen, um alle zu stoppen." }
+      }
+    },
+    "snooze": {
+      "name": "Schlummern",
+      "description": "Stoppt einen klingelnden Wecker und lässt ihn in ein paar Minuten erneut klingeln.",
+      "fields": {
+        "target": { "name": "Satellit", "description": "Nur den Wecker auf diesem Satelliten schlummern lassen. Leer lassen für alle." },
+        "minutes": { "name": "Minuten", "description": "Minuten, bis er erneut klingelt." }
+      }
+    },
+    "list_alarms": {
+      "name": "Wecker auflisten",
+      "description": "Gibt alle Wecker zurück und was gerade klingelt."
+    },
+    "test_alarm": {
+      "name": "Wecker testen",
+      "description": "Spielt den Weckton sofort auf einem Satelliten ab (oder spricht eine Erinnerung).",
+      "fields": {
+        "target": { "name": "Satellit", "description": "Der zu testende Assist-Satellit." },
+        "duration": { "name": "Dauer", "description": "Sekunden, die geklingelt wird." },
+        "sound": { "name": "Ton", "description": "Eigener Ton zum Testen." },
+        "message": { "name": "Nachricht", "description": "Spricht dies als Erinnerung, statt zu klingeln." }
+      }
+    }
+  }
+}

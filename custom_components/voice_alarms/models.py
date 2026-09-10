@@ -12,42 +12,71 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from .const import KIND_ALARM, KIND_REMINDER, KINDS, WEEKDAY_CODES
+from .i18n import WEEKDAYS, LocalizedError, default_language, tr
 
 _TIME_RE = re.compile(
-    r"^\s*(?P<h>\d{1,2})(?:[:.h](?P<m>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?\s*$",
+    r"^\s*(?P<h>\d{1,2})(?:[:.h](?P<m>\d{2}))?\s*(?:uhr)?\s*(?P<ampm>[ap]\.?m\.?)?\s*$",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"^\s*(?P<y>\d{4})-(?P<m>\d{1,2})-(?P<d>\d{1,2})\s*$")
-_REL_RE = re.compile(r"^\s*\+\s*(?P<n>\d+)\s*(?:d|days?)?\s*$", re.IGNORECASE)
+_REL_RE = re.compile(r"^\s*\+\s*(?P<n>\d+)\s*(?:d|days?|tage?)?\s*$", re.IGNORECASE)
 
-_WEEKDAY_LONG = [
-    "monday",
-    "tuesday",
-    "wednesday",
-    "thursday",
-    "friday",
-    "saturday",
-    "sunday",
-]
+# Words the parsers accept in any supported language (the LLM is told to pass English
+# or ISO forms, but a German conversation may well hand over 'morgen' or 'montags').
 _WEEKDAY_ALIASES: dict[str, int] = {}
-for _idx, (_code, _name) in enumerate(zip(WEEKDAY_CODES, _WEEKDAY_LONG, strict=True)):
+for _idx, _code in enumerate(WEEKDAY_CODES):
     _WEEKDAY_ALIASES[_code] = _idx
-    _WEEKDAY_ALIASES[_name] = _idx
-_WEEKDAY_ALIASES.update({"tues": 1, "wednes": 2, "thur": 3, "thurs": 3})
+    for _names in WEEKDAYS.values():
+        _WEEKDAY_ALIASES[_names[_idx].lower()] = _idx
+        _WEEKDAY_ALIASES[_names[_idx].lower() + "s"] = _idx  # 'montags', 'mondays'
+_WEEKDAY_ALIASES.update(
+    {
+        "tues": 1,
+        "wednes": 2,
+        "thur": 3,
+        "thurs": 3,
+        "mo": 0,
+        "di": 1,
+        "mi": 2,
+        "do": 3,
+        "fr": 4,
+        "sa": 5,
+        "so": 6,
+        "sonnabend": 5,
+    }
+)
 
+_EVERY_DAY = [0, 1, 2, 3, 4, 5, 6]
 _WEEKDAY_GROUPS: dict[str, list[int]] = {
-    "daily": [0, 1, 2, 3, 4, 5, 6],
-    "everyday": [0, 1, 2, 3, 4, 5, 6],
-    "every day": [0, 1, 2, 3, 4, 5, 6],
-    "all": [0, 1, 2, 3, 4, 5, 6],
+    "daily": _EVERY_DAY,
+    "everyday": _EVERY_DAY,
+    "every day": _EVERY_DAY,
+    "all": _EVERY_DAY,
     "weekdays": [0, 1, 2, 3, 4],
     "workdays": [0, 1, 2, 3, 4],
     "weekend": [5, 6],
     "weekends": [5, 6],
+    # German
+    "täglich": _EVERY_DAY,
+    "jeden tag": _EVERY_DAY,
+    "alle": _EVERY_DAY,
+    "wochentags": [0, 1, 2, 3, 4],
+    "wochentage": [0, 1, 2, 3, 4],
+    "werktags": [0, 1, 2, 3, 4],
+    "werktage": [0, 1, 2, 3, 4],
+    "wochenende": [5, 6],
+    "am wochenende": [5, 6],
+    "wochenenden": [5, 6],
 }
 
+_TODAY_WORDS = ("today", "now", "heute", "jetzt")
+_TOMORROW_WORDS = ("tomorrow", "morgen")
+_DAY_AFTER_WORDS = ("day after tomorrow", "overmorrow", "übermorgen")
+_NEXT_PREFIXES = ("next ", "nächsten ", "nächster ", "nächste ", "kommenden ", "kommender ")
+_THIS_PREFIXES = ("this ", "diesen ", "dieser ", "am ", "on ")
 
-class ParseError(ValueError):
+
+class ParseError(LocalizedError, ValueError):
     """Raised when user supplied input cannot be parsed."""
 
 
@@ -60,19 +89,19 @@ def parse_time(value: Any) -> time:
     text = str(value)
     match = _TIME_RE.match(text)
     if not match:
-        raise ParseError(f"'{text}' is not a valid time, use 24-hour HH:MM")
+        raise ParseError("err_time_format", text=text)
     hour = int(match.group("h"))
     minute = int(match.group("m") or 0)
     ampm = (match.group("ampm") or "").lower().replace(".", "")
     if ampm:
         if hour < 1 or hour > 12:
-            raise ParseError(f"'{text}' is not a valid time")
+            raise ParseError("err_time_invalid", text=text)
         if ampm == "am":
             hour = 0 if hour == 12 else hour
         else:
             hour = 12 if hour == 12 else hour + 12
     if hour > 23 or minute > 59:
-        raise ParseError(f"'{text}' is not a valid time, use 24-hour HH:MM")
+        raise ParseError("err_time_format", text=text)
     return time(hour=hour, minute=minute)
 
 
@@ -86,18 +115,18 @@ def parse_weekdays(value: Any) -> list[int]:
             return []
         if lowered in _WEEKDAY_GROUPS:
             return list(_WEEKDAY_GROUPS[lowered])
-        parts: list[Any] = [p for p in re.split(r"[,\s/;]+|\band\b", lowered) if p]
+        parts: list[Any] = [p for p in re.split(r"[,\s/;]+|\band\b|\bund\b", lowered) if p]
     else:
         parts = list(value)
     result: set[int] = set()
     for part in parts:
         if isinstance(part, bool):
-            raise ParseError(f"'{part}' is not a weekday")
+            raise ParseError("err_weekday", text=part)
         if isinstance(part, int):
             if 0 <= part <= 6:
                 result.add(part)
                 continue
-            raise ParseError(f"'{part}' is not a weekday (use 0=Monday .. 6=Sunday)")
+            raise ParseError("err_weekday_int", text=part)
         text = str(part).strip().lower().rstrip(".")
         if not text:
             continue
@@ -107,7 +136,7 @@ def parse_weekdays(value: Any) -> list[int]:
         if text in _WEEKDAY_ALIASES:
             result.add(_WEEKDAY_ALIASES[text])
             continue
-        raise ParseError(f"'{part}' is not a weekday")
+        raise ParseError("err_weekday", text=part)
     return sorted(result)
 
 
@@ -119,11 +148,11 @@ def parse_date(value: Any, now: datetime) -> date:
         return value
     text = str(value).strip().lower()
     today = now.astimezone(dt_util.get_default_time_zone()).date()
-    if text in ("today", "now"):
+    if text in _TODAY_WORDS:
         return today
-    if text == "tomorrow":
+    if text in _TOMORROW_WORDS:
         return today + timedelta(days=1)
-    if text in ("day after tomorrow", "overmorrow"):
+    if text in _DAY_AFTER_WORDS:
         return today + timedelta(days=2)
     if match := _REL_RE.match(text):
         return today + timedelta(days=int(match.group("n")))
@@ -131,15 +160,21 @@ def parse_date(value: Any, now: datetime) -> date:
         try:
             return date(int(match.group("y")), int(match.group("m")), int(match.group("d")))
         except ValueError as err:
-            raise ParseError(f"'{value}' is not a valid date") from err
-    stripped = text.removeprefix("next ").removeprefix("this ").strip()
+            raise ParseError("err_date_invalid", text=value) from err
+    stripped = text
+    is_next = False
+    for prefix in _NEXT_PREFIXES + _THIS_PREFIXES:
+        if stripped.startswith(prefix):
+            is_next = prefix in _NEXT_PREFIXES
+            stripped = stripped.removeprefix(prefix).strip()
+            break
     if stripped in _WEEKDAY_ALIASES:
         weekday = _WEEKDAY_ALIASES[stripped]
         delta = (weekday - today.weekday()) % 7
-        if delta == 0 and text.startswith("next "):
+        if delta == 0 and is_next:
             delta = 7
         return today + timedelta(days=delta)
-    raise ParseError(f"'{value}' is not a valid date, use YYYY-MM-DD")
+    raise ParseError("err_date_format", text=value)
 
 
 def combine_local(day: date, at: time) -> datetime:
@@ -193,12 +228,12 @@ class Alarm:
 
     @property
     def label(self) -> str:
-        """Short human label."""
+        """Short human label ('Alarm 07:00' in the instance language when unnamed)."""
         if self.name:
             return self.name
         if self.is_reminder and self.message:
             return self.message
-        kind = "Reminder" if self.is_reminder else "Alarm"
+        kind = tr(default_language(), "label_reminder" if self.is_reminder else "label_alarm")
         return f"{kind} {self.time.strftime('%H:%M')}"
 
     # ---- occurrence computation --------------------------------------------

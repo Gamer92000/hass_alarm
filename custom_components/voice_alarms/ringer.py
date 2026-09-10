@@ -41,6 +41,7 @@ from .const import (
     MIN_PLAYBACK_FOR_DEVICE_STOP,
 )
 from .http import StreamRegistry, StreamSpec
+from .i18n import default_language, tr
 from .models import Alarm
 from .targets import Target
 
@@ -330,7 +331,7 @@ class RingSession:
                     "announce",
                     {
                         ATTR_ENTITY_ID: self.target.entity_id,
-                        "message": f"Reminder: {text}",
+                        "message": tr(default_language(), "spoken_reminder", text=text),
                         "preannounce": True,
                     },
                     blocking=True,

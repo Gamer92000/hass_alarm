@@ -49,6 +49,7 @@ from .const import (
     STORAGE_VERSION,
 )
 from .http import StreamRegistry
+from .i18n import LocalizedError, default_language, tr
 from .models import Alarm, combine_local
 from .ringer import RingConfig, RingSession
 from .targets import Target, get_target, get_targets, match_targets
@@ -58,8 +59,8 @@ _LOGGER = logging.getLogger(__name__)
 MAX_RECENT_SESSIONS = 10
 
 
-class AlarmError(ValueError):
-    """Raised for invalid alarm operations (user facing message)."""
+class AlarmError(LocalizedError, ValueError):
+    """Raised for invalid alarm operations (user facing, see ``i18n.py`` for the texts)."""
 
 
 class AlarmManager:
@@ -302,7 +303,7 @@ class AlarmManager:
 
     def _validate(self, alarm: Alarm, now: datetime) -> None:
         if self.target(alarm.target) is None:
-            raise AlarmError(f"Unknown voice satellite '{alarm.target}'")
+            raise AlarmError("err_unknown_target", target=alarm.target)
         if not alarm.is_recurring:
             if alarm.date is None:
                 local_now = dt_util.as_local(now)
@@ -311,9 +312,9 @@ class AlarmManager:
                     candidate = combine_local(local_now.date() + timedelta(days=1), alarm.time)
                 alarm.date = candidate.astimezone(dt_util.get_default_time_zone()).date()
             elif combine_local(alarm.date, alarm.time) <= now:
-                raise AlarmError("That time is already in the past")
+                raise AlarmError("err_time_past")
         if alarm.duration is not None and alarm.duration < 1:
-            raise AlarmError("Duration must be at least 1 second")
+            raise AlarmError("err_duration")
 
     async def async_add_alarm(self, alarm: Alarm) -> Alarm:
         """Add a validated alarm."""
@@ -335,7 +336,7 @@ class AlarmManager:
         """
         alarm = self.alarms.get(alarm_id)
         if alarm is None:
-            raise AlarmError(f"No alarm with id {alarm_id}")
+            raise AlarmError("err_no_such_alarm", alarm_id=alarm_id)
         now = dt_util.utcnow()
         schedule_changed = False
         for key, value in changes.items():
@@ -371,7 +372,7 @@ class AlarmManager:
             elif key == "enabled":
                 alarm.enabled = bool(value)
             else:
-                raise AlarmError(f"Unknown field {key}")
+                raise AlarmError("err_unknown_field", field=key)
         if schedule_changed:
             alarm.last_fired = None
             alarm.skipped_occurrence = None
@@ -388,7 +389,7 @@ class AlarmManager:
         """Delete an alarm."""
         alarm = self.alarms.pop(alarm_id, None)
         if alarm is None:
-            raise AlarmError(f"No alarm with id {alarm_id}")
+            raise AlarmError("err_no_such_alarm", alarm_id=alarm_id)
         self._save()
         self._notify_alarms()
         await self._process()
@@ -403,9 +404,9 @@ class AlarmManager:
         """
         alarm = self.alarms.get(alarm_id)
         if alarm is None:
-            raise AlarmError(f"No alarm with id {alarm_id}")
+            raise AlarmError("err_no_such_alarm", alarm_id=alarm_id)
         if not alarm.is_recurring:
-            raise AlarmError("Only repeating alarms can skip an occurrence; delete it instead")
+            raise AlarmError("err_skip_not_recurring")
         now = dt_util.utcnow()
         after = max(now, alarm.pending_after())
         if undo:
@@ -467,7 +468,7 @@ class AlarmManager:
             alarm=alarm,
             kind=kind,
             message=message,
-            label=label or (alarm.label if alarm else "Alarm"),
+            label=label or (alarm.label if alarm else tr(default_language(), "label_alarm")),
             origin=origin,
             loop=self.loop,
         )
@@ -492,7 +493,7 @@ class AlarmManager:
     async def async_snooze(self, session: RingSession, minutes: int) -> Alarm:
         """Dismiss a session and ring again in ``minutes`` minutes."""
         if minutes < 1:
-            raise AlarmError("Snooze must be at least 1 minute")
+            raise AlarmError("err_snooze_minutes")
         session.dismiss(by="snooze")
         when = dt_util.as_local(dt_util.utcnow() + timedelta(minutes=minutes))
         when = when.replace(second=0, microsecond=0)
@@ -503,7 +504,7 @@ class AlarmManager:
             target=session.target.entity_id,
             time=when.time(),
             date=when.date(),
-            name=f"{session.label} (snoozed)",
+            name=tr(default_language(), "snoozed_name", label=session.label),
             kind=session.kind,
             message=session.message,
             duration=base.duration if base else None,

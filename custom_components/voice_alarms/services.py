@@ -45,6 +45,7 @@ from .const import (
     SERVICE_TEST_ALARM,
     SERVICE_UPDATE_ALARM,
 )
+from .i18n import LocalizedError, default_language
 from .manager import AlarmError, AlarmManager
 from .models import ParseError, parse_date, parse_time, parse_weekdays
 
@@ -111,6 +112,8 @@ TEST_SCHEMA = vol.Schema(
 
 
 def _wrap(err: Exception) -> ServiceValidationError:
+    if isinstance(err, LocalizedError):
+        return ServiceValidationError(err.localized(default_language()))
     return ServiceValidationError(str(err))
 
 

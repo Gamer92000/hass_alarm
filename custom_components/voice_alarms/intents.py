@@ -1,4 +1,8 @@
-"""Intents (also exposed as LLM tools) for Voice Alarms."""
+"""Intents (also exposed as LLM tools) for Voice Alarms.
+
+Responses are spoken in the language of the conversation (``intent.language``); the
+tool descriptions stay English because they are read by the LLM, not the user.
+"""
 
 from __future__ import annotations
 
@@ -27,10 +31,12 @@ from .const import (
     RECENTLY_DISMISSED_SECONDS,
     WEEKDAY_CODES,
 )
-from .manager import AlarmError, AlarmManager
-from .models import Alarm, ParseError, parse_date, parse_time, parse_weekdays
+from .i18n import LocalizedError, normalize_language, tr
+from .manager import AlarmManager
+from .models import Alarm, parse_date, parse_time, parse_weekdays
 from .ringer import STATE_PAUSED, RingSession
 from .speech import (
+    capitalize,
     describe_alarm,
     describe_briefly,
     format_day,
@@ -71,8 +77,8 @@ DATE_FILTER_HELP = (
 TARGET_FILTER_HELP = "Satellite the alarm belongs to (name/area), to find it."
 
 
-class IntentFailed(Exception):
-    """User facing failure."""
+class IntentFailed(LocalizedError):
+    """User facing failure; ``key`` names the text in ``i18n.py``."""
 
 
 class _VoiceAlarmIntent(intent.IntentHandler):
@@ -102,28 +108,34 @@ class _VoiceAlarmIntent(intent.IntentHandler):
             return value or None
         return value
 
+    @staticmethod
+    def _lang(intent_obj: intent.Intent) -> str:
+        """Language of the conversation, reduced to one we can speak."""
+        return normalize_language(intent_obj.language)
+
     def _current_target(self, intent_obj: intent.Intent) -> Target | None:
         if intent_obj.satellite_id and (target := get_target(self.hass, intent_obj.satellite_id)):
             return target
         return get_target_for_device(self.hass, intent_obj.device_id)
 
-    def _target_names(self) -> str:
+    def _target_names(self, lang: str) -> str:
         names = [t.display for t in self.manager.targets()]
-        return join_list(names) if names else "none configured"
+        return join_list(names, lang) if names else tr(lang, "none_configured")
 
     def _resolve_target(self, intent_obj: intent.Intent, query: str | None) -> Target:
+        lang = self._lang(intent_obj)
         if query:
             matches = self.manager.match_target(query)
             if len(matches) == 1:
                 return matches[0]
             if not matches:
                 raise IntentFailed(
-                    f"I don't know a voice satellite called '{query}'. "
-                    f"Available satellites: {self._target_names()}."
+                    "err_unknown_satellite", query=query, names=self._target_names(lang)
                 )
             raise IntentFailed(
-                f"'{query}' matches several satellites: "
-                f"{join_list([t.display for t in matches])}. Which one?"
+                "err_ambiguous_satellite",
+                query=query,
+                names=join_list([t.display for t in matches], lang),
             )
         current = self._current_target(intent_obj)
         if current is not None:
@@ -131,10 +143,7 @@ class _VoiceAlarmIntent(intent.IntentHandler):
         targets = self.manager.targets()
         if len(targets) == 1:
             return targets[0]
-        raise IntentFailed(
-            "I can't tell which voice satellite you are using, please name the target satellite. "
-            f"Available satellites: {self._target_names()}."
-        )
+        raise IntentFailed("err_no_current_satellite", names=self._target_names(lang))
 
     def _match_alarms(self, intent_obj: intent.Intent) -> list[Alarm]:
         alarm_id = self._slot(intent_obj, "alarm_id")
@@ -142,15 +151,16 @@ class _VoiceAlarmIntent(intent.IntentHandler):
         if alarm_id:
             found = [a for a in alarms if a.id == alarm_id]
             if not found:
-                raise IntentFailed(f"There is no alarm with id {alarm_id}.")
+                raise IntentFailed("err_no_alarm_id", alarm_id=alarm_id)
             return found
         target_query = self._slot(intent_obj, "target")
         if target_query:
             matches = self.manager.match_target(target_query)
             if not matches:
                 raise IntentFailed(
-                    f"I don't know a voice satellite called '{target_query}'. "
-                    f"Available satellites: {self._target_names()}."
+                    "err_unknown_satellite",
+                    query=target_query,
+                    names=self._target_names(self._lang(intent_obj)),
                 )
             ids = {t.entity_id for t in matches}
             alarms = [a for a in alarms if a.target in ids]
@@ -192,11 +202,13 @@ class _VoiceAlarmIntent(intent.IntentHandler):
         return any(self._slot(intent_obj, key) for key in ("alarm_id", "name", "time"))
 
     def _pick_one(self, intent_obj: intent.Intent, candidates: list[Alarm], verb: str) -> Alarm:
+        """Pick exactly one alarm; ``verb`` is the i18n key of what would be done to it."""
+        lang = self._lang(intent_obj)
         if not candidates:
             if not self.manager.alarms:
-                raise IntentFailed("There are no alarms or reminders configured.")
+                raise IntentFailed("err_none_configured")
             raise IntentFailed(
-                f"No alarm matches. Configured: {self._describe_all(self.manager.sorted_alarms())}."
+                "err_no_match", all=self._describe_all(self.manager.sorted_alarms(), lang)
             )
         if len(candidates) == 1:
             return candidates[0]
@@ -206,29 +218,41 @@ class _VoiceAlarmIntent(intent.IntentHandler):
             if len(here) == 1:
                 return here[0]
         raise IntentFailed(
-            f"{len(candidates)} alarms match, which one should I {verb}? "
-            f"{self._describe_all(candidates)}."
+            "err_which_one",
+            count=len(candidates),
+            verb=tr(lang, verb),
+            all=self._describe_all(candidates, lang),
         )
 
-    def _describe_all(self, alarms: list[Alarm]) -> str:
+    def _describe_all(self, alarms: list[Alarm], lang: str) -> str:
         now = dt_util.utcnow()
         parts = [
-            f"{describe_alarm(a, self.manager.target(a.target), now)} [id {a.id}]" for a in alarms
+            describe_alarm(a, self.manager.target(a.target), now, language=lang)
+            + tr(lang, "id_suffix", alarm_id=a.id)
+            for a in alarms
         ]
         return "; ".join(parts)
+
+    def _where(self, alarm: Alarm) -> str:
+        target = self.manager.target(alarm.target)
+        return target.display if target else alarm.target
 
     # ------------------------------------------------------------- handling
 
     async def async_handle(self, intent_obj: intent.Intent) -> intent.IntentResponse:
-        """Handle with uniform error reporting."""
+        """Handle with uniform error reporting in the conversation language."""
         response = intent_obj.create_response()
+        lang = self._lang(intent_obj)
         try:
             await self._handle(intent_obj, response)
-        except (IntentFailed, AlarmError, ParseError) as err:
-            response.async_set_error(intent.IntentResponseErrorCode.FAILED_TO_HANDLE, str(err))
+        except LocalizedError as err:  # IntentFailed, AlarmError, ParseError
+            response.async_set_error(
+                intent.IntentResponseErrorCode.FAILED_TO_HANDLE, err.localized(lang)
+            )
         except vol.Invalid as err:
             response.async_set_error(
-                intent.IntentResponseErrorCode.FAILED_TO_HANDLE, f"Invalid input: {err}"
+                intent.IntentResponseErrorCode.FAILED_TO_HANDLE,
+                tr(lang, "err_invalid_input", error=str(err)),
             )
         return response
 
@@ -267,14 +291,12 @@ class SetAlarmIntent(_VoiceAlarmIntent):
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
+        lang = self._lang(intent_obj)
         at = parse_time(self._slot(intent_obj, "time"))
         weekdays = parse_weekdays(self._slot(intent_obj, "weekdays"))
         date_text = self._slot(intent_obj, "date")
         if weekdays and date_text:
-            raise IntentFailed(
-                "An alarm either repeats on weekdays or rings once on a date, not both. Drop "
-                "the date; a repeating alarm starts with its next occurrence."
-            )
+            raise IntentFailed("err_date_and_weekdays")
         on_date = parse_date(date_text, now) if date_text else None
         target = self._resolve_target(intent_obj, self._slot(intent_obj, "target"))
         message = self._slot(intent_obj, "message")
@@ -291,15 +313,16 @@ class SetAlarmIntent(_VoiceAlarmIntent):
         )
         alarm = await self.manager.async_add_alarm(alarm)
         nxt = alarm.next_pending(dt_util.utcnow())
-        text = f"Created {describe_alarm(alarm, target, now)}."
-        response.async_set_speech(text)
+        response.async_set_speech(
+            tr(lang, "created", alarm=describe_alarm(alarm, target, now, language=lang))
+        )
         response.async_set_speech_slots(
             {
                 "alarm_id": alarm.id,
                 "target": target.entity_id,
                 "target_name": target.display,
                 "next": nxt.isoformat() if nxt else None,
-                "repeats": format_days(alarm.weekdays) if alarm.is_recurring else "once",
+                "repeats": _repeats(alarm, lang),
             }
         )
 
@@ -327,6 +350,7 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
+        lang = self._lang(intent_obj)
         target_query = self._slot(intent_obj, "target")
         alarms = self.manager.sorted_alarms()
         scope = ""
@@ -335,12 +359,11 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
             scoped = self.manager.match_target(target_query)
             if not scoped:
                 raise IntentFailed(
-                    f"I don't know a voice satellite called '{target_query}'. "
-                    f"Available satellites: {self._target_names()}."
+                    "err_unknown_satellite", query=target_query, names=self._target_names(lang)
                 )
             ids = {t.entity_id for t in scoped}
             alarms = [a for a in alarms if a.target in ids]
-            scope = f" on {join_list([t.display for t in scoped])}"
+            scope = tr(lang, "scope_on", names=join_list([t.display for t in scoped], lang))
 
         if date_text := self._slot(intent_obj, "date"):
             day = parse_date(date_text, now)
@@ -349,25 +372,37 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
 
         parts: list[str] = []
         if not alarms:
-            parts.append(f"There are no alarms or reminders configured{scope}.")
+            parts.append(tr(lang, "list_none", scope=scope))
         else:
             count = len(alarms)
-            noun = "alarm" if count == 1 else "alarms"
             listing = "; ".join(
-                f"{idx}. {describe_alarm(a, self.manager.target(a.target), now)}"
+                f"{idx}. {describe_alarm(a, self.manager.target(a.target), now, language=lang)}"
                 for idx, a in enumerate(alarms, start=1)
             )
-            parts.append(f"You have {count} {noun}{scope}: {listing}.")
+            parts.append(
+                tr(
+                    lang,
+                    "list_have",
+                    count=count,
+                    noun=tr(lang, "noun_alarm" if count == 1 else "noun_alarms"),
+                    scope=scope,
+                    listing=listing,
+                )
+            )
         ringing = self.manager.active_sessions()
         if ringing:
             parts.append(
-                "Currently ringing: " + join_list([_describe_session(s) for s in ringing]) + "."
+                tr(
+                    lang,
+                    "list_ringing",
+                    list=join_list([_describe_session(s, lang) for s in ringing], lang),
+                )
             )
         response.async_set_speech(" ".join(parts))
         response.async_set_speech_slots(
             {
                 "count": len(alarms),
-                "alarms": [_alarm_summary(a, now) for a in alarms],
+                "alarms": [_alarm_summary(a, now, lang) for a in alarms],
                 "ringing": [s.to_dict() for s in ringing],
             }
         )
@@ -383,6 +418,7 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
         now: datetime,
     ) -> None:
         """Answer 'what rings on <day>' with just the times, grouped by satellite."""
+        lang = self._lang(intent_obj)
         rings: list[tuple[datetime, Alarm, bool]] = []
         for alarm in alarms:
             if not alarm.enabled:
@@ -391,15 +427,15 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
             if at is not None:
                 rings.append((at, alarm, alarm.skipped_occurrence == at))
         rings.sort(key=lambda ring: (ring[0], ring[1].label.lower()))
-        when = format_day(day, now)
+        when = format_day(day, now, lang)
 
         if not rings:
-            text = f"There are no alarms or reminders {when}{scope}."
+            text = capitalize(tr(lang, "day_none", when=when, scope=scope))
             upcoming = [a for a in alarms if a.next_pending(now) is not None]
             if upcoming:
                 nxt = upcoming[0]
-                described = describe_alarm(nxt, self.manager.target(nxt.target), now)
-                text += f" The next one is the {described}."
+                described = describe_alarm(nxt, self.manager.target(nxt.target), now, language=lang)
+                text += tr(lang, "day_next", alarm=described)
             response.async_set_speech(text)
             response.async_set_speech_slots({"date": day.isoformat(), "count": 0, "alarms": []})
             return
@@ -408,21 +444,37 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
         # is on the one the user is talking to (or the one they asked about).
         groups: dict[str, list[str]] = {}
         for at, alarm, skipped in rings:
-            groups.setdefault(alarm.target, []).append(describe_briefly(alarm, at, skipped=skipped))
+            groups.setdefault(alarm.target, []).append(
+                describe_briefly(alarm, at, skipped=skipped, language=lang)
+            )
         implied = {t.entity_id for t in scoped}
         if (current := self._current_target(intent_obj)) is not None:
             implied.add(current.entity_id)
         name_targets = len(groups) > 1 or not set(groups) <= implied
         segments: list[str] = []
         for entity_id, items in groups.items():
-            segment = join_list(items)
+            segment = join_list(items, lang)
             if name_targets:
                 target = self.manager.target(entity_id)
-                segment += f" on {target.display if target else entity_id}"
+                segment = tr(
+                    lang,
+                    "segment_on",
+                    items=segment,
+                    target=target.display if target else entity_id,
+                )
             segments.append(segment)
         count = len(rings)
-        noun = "alarm" if count == 1 else "alarms"
-        text = f"{when[0].upper()}{when[1:]} you have {count} {noun}{scope}: {'; '.join(segments)}."
+        text = capitalize(
+            tr(
+                lang,
+                "day_have",
+                when=when,
+                count=count,
+                noun=tr(lang, "noun_alarm" if count == 1 else "noun_alarms"),
+                scope=scope,
+                segments="; ".join(segments),
+            )
+        )
         response.async_set_speech(text)
         response.async_set_speech_slots(
             {
@@ -466,26 +518,29 @@ class DeleteAlarmIntent(_VoiceAlarmIntent):
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
+        lang = self._lang(intent_obj)
         candidates = self._match_alarms(intent_obj)
         if self._slot(intent_obj, "all"):
             if not candidates:
-                raise IntentFailed("There are no alarms to delete.")
+                raise IntentFailed("err_delete_none")
             deleted = [await self.manager.async_delete_alarm(a.id) for a in candidates]
         else:
             if not self._has_filters(intent_obj) and len(candidates) > 1:
                 raise IntentFailed(
-                    f"There are {len(candidates)} alarms, which one should I delete? "
-                    f"{self._describe_all(candidates)}. Say all=true to delete all of them."
+                    "err_delete_which",
+                    count=len(candidates),
+                    all=self._describe_all(candidates, lang),
                 )
             deleted = [
                 await self.manager.async_delete_alarm(
-                    self._pick_one(intent_obj, candidates, "delete").id
+                    self._pick_one(intent_obj, candidates, "verb_delete").id
                 )
             ]
         descriptions = [
-            describe_alarm(a, self.manager.target(a.target), now, with_next=False) for a in deleted
+            describe_alarm(a, self.manager.target(a.target), now, with_next=False, language=lang)
+            for a in deleted
         ]
-        response.async_set_speech(f"Deleted {join_list(descriptions)}.")
+        response.async_set_speech(tr(lang, "deleted", list=join_list(descriptions, lang)))
         response.async_set_speech_slots({"deleted": [a.id for a in deleted]})
 
 
@@ -519,6 +574,7 @@ class SkipNextIntent(_VoiceAlarmIntent):
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
+        lang = self._lang(intent_obj)
         undo = bool(self._slot(intent_obj, "undo"))
         candidates = [a for a in self._match_alarms(intent_obj) if a.is_recurring]
         if date_text := self._slot(intent_obj, "date"):
@@ -527,12 +583,13 @@ class SkipNextIntent(_VoiceAlarmIntent):
             if candidates and not on_day:
                 later = join_list(
                     [
-                        f"'{a.label}' rings next {format_when(nxt, now)}"
+                        tr(lang, "rings_next", label=a.label, when=format_when(nxt, now, lang))
                         for a in candidates
                         if (nxt := _next_ring(a, now)) is not None
-                    ]
+                    ],
+                    lang,
                 )
-                raise IntentFailed(f"I can only skip the very next ring: {later}.")
+                raise IntentFailed("err_skip_only_next", later=later)
             candidates = on_day
         every = bool(self._slot(intent_obj, "all"))
         if not every and len(candidates) > 1 and not self._names_one(intent_obj):
@@ -548,23 +605,29 @@ class SkipNextIntent(_VoiceAlarmIntent):
                 candidates = [a for a in pool if _next_ring_day(a, now) == first]
                 every = True
         if every and len(candidates) > 1:
-            await self._skip_many(response, candidates, undo, now)
+            await self._skip_many(response, candidates, undo, now, lang)
             return
-        alarm = self._pick_one(intent_obj, candidates, "reinstate" if undo else "skip")
-        target = self.manager.target(alarm.target)
-        where = target.display if target else alarm.target
+        alarm = self._pick_one(intent_obj, candidates, "verb_reinstate" if undo else "verb_skip")
+        where = self._where(alarm)
         if undo:
             if alarm.skipped_occurrence is None:
-                raise IntentFailed(
-                    f"The alarm '{alarm.label}' on {where} has no skipped occurrence."
-                )
+                raise IntentFailed("err_no_skipped", label=alarm.label, where=where)
             alarm, restored = await self.manager.async_skip_next(alarm.id, undo=True)
             nxt = alarm.next_pending(now)
-            text = f"Reinstated the alarm '{alarm.label}' on {where}"
-            if restored:
-                text += f" {format_when(restored, now)}"
+            text = tr(
+                lang,
+                "reinstated",
+                label=alarm.label,
+                where=where,
+                when=f" {format_when(restored, now, lang)}" if restored else "",
+            )
             if nxt:
-                text += f"; it rings next {format_when(nxt, now)} ({format_relative(nxt, now)})"
+                text += tr(
+                    lang,
+                    "rings_next_clause",
+                    when=format_when(nxt, now, lang),
+                    relative=format_relative(nxt, now, lang),
+                )
             response.async_set_speech(text + ".")
             response.async_set_speech_slots(
                 {"alarm_id": alarm.id, "next": nxt.isoformat() if nxt else None}
@@ -574,20 +637,36 @@ class SkipNextIntent(_VoiceAlarmIntent):
         scheduled = alarm.next_scheduled(after)
         if scheduled is not None and alarm.skipped_occurrence == scheduled:
             nxt = alarm.next_pending(now)
-            text = (
-                f"The alarm '{alarm.label}' on {where} {format_when(scheduled, now)} is already "
-                "skipped"
+            raise IntentFailed(
+                "err_already_skipped",
+                label=alarm.label,
+                where=where,
+                when=format_when(scheduled, now, lang),
+                next=tr(
+                    lang,
+                    "rings_next_clause",
+                    when=format_when(nxt, now, lang),
+                    relative=format_relative(nxt, now, lang),
+                )
+                if nxt
+                else "",
             )
-            if nxt:
-                text += f"; it rings next {format_when(nxt, now)} ({format_relative(nxt, now)})"
-            raise IntentFailed(text + ".")
         alarm, skipped = await self.manager.async_skip_next(alarm.id)
         nxt = alarm.next_pending(now)
-        text = f"Skipping the alarm '{alarm.label}' on {where}"
-        if skipped:
-            text += f" {format_when(skipped, now)}"
+        text = tr(
+            lang,
+            "skipping",
+            label=alarm.label,
+            where=where,
+            when=f" {format_when(skipped, now, lang)}" if skipped else "",
+        )
         if nxt:
-            text += f". It rings next {format_when(nxt, now)} ({format_relative(nxt, now)})"
+            text += tr(
+                lang,
+                "rings_next_sentence",
+                when=format_when(nxt, now, lang),
+                relative=format_relative(nxt, now, lang),
+            )
         response.async_set_speech(text + ".")
         response.async_set_speech_slots(
             {
@@ -603,12 +682,13 @@ class SkipNextIntent(_VoiceAlarmIntent):
         alarms: list[Alarm],
         undo: bool,
         now: datetime,
+        lang: str,
     ) -> None:
         """Skip (or reinstate) several alarms and describe them grouped by day and satellite."""
         if undo:
             alarms = [a for a in alarms if a.skipped_occurrence is not None]
             if not alarms:
-                raise IntentFailed("None of the matching alarms has a skipped occurrence.")
+                raise IntentFailed("err_none_skipped")
         results = [await self.manager.async_skip_next(a.id, undo=undo) for a in alarms]
         results.sort(key=lambda r: (r[1] is None, r[1] or now, r[0].label.lower()))
         groups: dict[tuple[date, str], list[str]] = {}
@@ -616,18 +696,34 @@ class SkipNextIntent(_VoiceAlarmIntent):
             if at is None:
                 continue
             key = (dt_util.as_local(at).date(), alarm.target)
-            groups.setdefault(key, []).append(describe_briefly(alarm, at))
+            groups.setdefault(key, []).append(describe_briefly(alarm, at, language=lang))
         segments: list[str] = []
         for (day, entity_id), items in groups.items():
             target = self.manager.target(entity_id)
-            where = target.display if target else entity_id
-            segments.append(f"{join_list(items)} on {where} {format_day(day, now)}")
-        verb = "Reinstated" if undo else "Skipping"
-        text = f"{verb} {len(results)} alarms: {'; '.join(segments)}."
+            segments.append(
+                tr(
+                    lang,
+                    "skip_segment",
+                    items=join_list(items, lang),
+                    where=target.display if target else entity_id,
+                    day=format_day(day, now, lang),
+                )
+            )
+        text = tr(
+            lang,
+            "reinstate_many" if undo else "skip_many",
+            count=len(results),
+            segments="; ".join(segments),
+        )
         nexts = [nxt for alarm, _ in results if (nxt := alarm.next_pending(now)) is not None]
         if nexts:
             nxt = min(nexts)
-            text += f" The next ring is {format_when(nxt, now)} ({format_relative(nxt, now)})."
+            text += tr(
+                lang,
+                "next_ring",
+                when=format_when(nxt, now, lang),
+                relative=format_relative(nxt, now, lang),
+            )
         response.async_set_speech(text)
         response.async_set_speech_slots(
             {
@@ -682,54 +778,49 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
+        lang = self._lang(intent_obj)
         candidates = self._match_alarms(intent_obj)
         if self._slot(intent_obj, "all"):
             if not candidates:
-                raise IntentFailed("There are no alarms to change.")
+                raise IntentFailed("err_update_none")
             alarms = candidates
         else:
-            alarms = [self._pick_one(intent_obj, candidates, "change")]
+            alarms = [self._pick_one(intent_obj, candidates, "verb_change")]
         changes: dict[str, Any] = {}
         described: list[str] = []
         if new_time := self._slot(intent_obj, "new_time"):
             changes["time"] = parse_time(new_time)
-            described.append(f"time to {changes['time'].strftime('%H:%M')}")
+            described.append(tr(lang, "change_time", time=changes["time"].strftime("%H:%M")))
         if (new_weekdays := self._slot(intent_obj, "new_weekdays")) is not None:
-            if isinstance(new_weekdays, str) and new_weekdays.lower() in (
-                "none",
-                "never",
-                "once",
-                "one-time",
-                "one time",
-            ):
+            if isinstance(new_weekdays, str) and new_weekdays.lower() in _ONCE_WORDS:
                 changes["weekdays"] = []
-                described.append("repeat to one-time")
+                described.append(tr(lang, "change_once"))
             else:
                 changes["weekdays"] = parse_weekdays(new_weekdays)
-                described.append(f"repeat to {format_days(changes['weekdays'])}")
+                described.append(
+                    tr(lang, "change_repeat", days=format_days(changes["weekdays"], lang))
+                )
         if new_date := self._slot(intent_obj, "new_date"):
             changes["date"] = parse_date(new_date, now)
-            described.append(f"date to {changes['date'].isoformat()}")
+            described.append(tr(lang, "change_date", date=changes["date"].isoformat()))
         if new_name := self._slot(intent_obj, "new_name"):
             changes["name"] = new_name
-            described.append(f"name to '{new_name}'")
+            described.append(tr(lang, "change_name", name=new_name))
         if new_message := self._slot(intent_obj, "new_message"):
             changes["message"] = new_message
-            described.append(f"message to '{new_message}'")
+            described.append(tr(lang, "change_message", message=new_message))
         if new_target := self._slot(intent_obj, "new_target"):
             target = self._resolve_target(intent_obj, new_target)
             changes["target"] = target.entity_id
-            described.append(f"satellite to {target.display}")
+            described.append(tr(lang, "change_target", target=target.display))
         if (enabled := self._slot(intent_obj, "enabled")) is not None:
             changes["enabled"] = bool(enabled)
-            described.append("enabled it" if enabled else "disabled it")
+            described.append(tr(lang, "change_enabled" if enabled else "change_disabled"))
         if duration_minutes := self._slot(intent_obj, "duration_minutes"):
             changes["duration"] = int(duration_minutes) * 60
-            described.append(f"ring duration to {duration_minutes} minutes")
+            described.append(tr(lang, "change_duration", minutes=duration_minutes))
         if not changes:
-            raise IntentFailed(
-                "Nothing to change: give a new time, days, name, target or enabled flag."
-            )
+            raise IntentFailed("err_nothing_to_change")
         updated: list[Alarm] = []
         for alarm in alarms:
             alarm_changes = dict(changes)
@@ -737,13 +828,20 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
             if "date" in alarm_changes and "weekdays" not in alarm_changes and alarm.is_recurring:
                 alarm_changes["weekdays"] = []
             updated.append(await self.manager.async_update_alarm(alarm.id, **alarm_changes))
-        descriptions = [describe_alarm(a, self.manager.target(a.target), now) for a in updated]
+        descriptions = [
+            describe_alarm(a, self.manager.target(a.target), now, language=lang) for a in updated
+        ]
         if len(updated) == 1:
-            text = f"Changed {join_list(described)}. It is now {descriptions[0]}."
+            text = tr(
+                lang, "changed_one", changes=join_list(described, lang), alarm=descriptions[0]
+            )
         else:
-            text = (
-                f"Changed {join_list(described)} for {len(updated)} alarms. They are now: "
-                f"{'; '.join(descriptions)}."
+            text = tr(
+                lang,
+                "changed_many",
+                changes=join_list(described, lang),
+                count=len(updated),
+                alarms="; ".join(descriptions),
             )
         response.async_set_speech(text)
         nexts = [nxt for a in updated if (nxt := a.next_pending(now)) is not None]
@@ -775,6 +873,7 @@ class DismissIntent(_VoiceAlarmIntent):
 
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
+        lang = self._lang(intent_obj)
         target_query = self._slot(intent_obj, "target")
         snooze = self._slot(intent_obj, "snooze_minutes")
         sessions: list[RingSession] = []
@@ -782,7 +881,7 @@ class DismissIntent(_VoiceAlarmIntent):
             target = self._resolve_target(intent_obj, target_query)
             session = self.manager.session_for_target(target.entity_id)
             if session is None:
-                raise IntentFailed(f"Nothing is ringing on {target.display}.")
+                raise IntentFailed("err_nothing_ringing_on", target=target.display)
             sessions = [session]
         else:
             current = self._current_target(intent_obj)
@@ -796,16 +895,19 @@ class DismissIntent(_VoiceAlarmIntent):
                 last = recent[-1]
                 assert last.finished_at is not None
                 ago = int((now - last.finished_at).total_seconds())
-                how = {
-                    "device": "was stopped on the device",
-                    "user": "was already dismissed",
-                    "snooze": "was snoozed",
-                }.get(last.dismissed_by or "", "already stopped")
+                how_key = {
+                    "device": "how_device",
+                    "user": "how_user",
+                    "snooze": "how_snooze",
+                }.get(last.dismissed_by or "", "how_other")
                 raise IntentFailed(
-                    f"Nothing is ringing right now. The {last.kind} '{last.label}' on "
-                    f"{last.target.display} {how} {ago} seconds ago."
+                    "err_nothing_ringing_recent",
+                    kind=tr(lang, f"The_{last.kind}"),
+                    label=last.label,
+                    target=last.target.display,
+                    how=tr(lang, how_key, ago=ago),
                 )
-            raise IntentFailed("Nothing is ringing right now.")
+            raise IntentFailed("err_nothing_ringing")
 
         if snooze:
             created = [await self.manager.async_snooze(s, int(snooze)) for s in sessions]
@@ -813,12 +915,19 @@ class DismissIntent(_VoiceAlarmIntent):
             for session, alarm in zip(sessions, created, strict=True):
                 nxt = alarm.next_pending(dt_util.utcnow())
                 when = (
-                    f" at {dt_util.as_local(nxt).strftime('%H:%M')} ({format_relative(nxt, now)})"
+                    tr(
+                        lang,
+                        "snooze_at",
+                        time=dt_util.as_local(nxt).strftime("%H:%M"),
+                        relative=format_relative(nxt, now, lang),
+                    )
                     if nxt
                     else ""
                 )
-                parts.append(f"{_describe_session(session)}, rings again{when}")
-            response.async_set_speech(f"Snoozed {join_list(parts)}.")
+                parts.append(
+                    tr(lang, "snooze_item", session=_describe_session(session, lang), when=when)
+                )
+            response.async_set_speech(tr(lang, "snoozed", list=join_list(parts, lang)))
             response.async_set_speech_slots({"snoozed": [a.id for a in created]})
             return
 
@@ -827,16 +936,35 @@ class DismissIntent(_VoiceAlarmIntent):
         )
         for session in sessions:
             session.dismiss(by="user")
-        response.async_set_speech(f"Stopped {join_list([_describe_session(s) for s in sessions])}.")
+        response.async_set_speech(
+            tr(
+                lang,
+                "stopped",
+                list=join_list([_describe_session(s, lang) for s in sessions], lang),
+            )
+        )
         response.async_set_speech_slots({"stopped": [s.target.entity_id for s in sessions]})
 
 
-def _describe_session(session: RingSession) -> str:
-    state = " (paused)" if session.state == STATE_PAUSED else ""
-    return f"the {session.kind} '{session.label}' on {session.target.display}{state}"
+_ONCE_WORDS = ("none", "never", "once", "one-time", "one time", "nie", "einmal", "einmalig")
 
 
-def _alarm_summary(alarm: Alarm, now: datetime) -> dict[str, Any]:
+def _repeats(alarm: Alarm, lang: str) -> str:
+    return format_days(alarm.weekdays, lang) if alarm.is_recurring else tr(lang, "repeats_once")
+
+
+def _describe_session(session: RingSession, lang: str) -> str:
+    return tr(
+        lang,
+        "session",
+        kind=tr(lang, f"the_{session.kind}"),
+        label=session.label,
+        target=session.target.display,
+        state=tr(lang, "paused") if session.state == STATE_PAUSED else "",
+    )
+
+
+def _alarm_summary(alarm: Alarm, now: datetime, lang: str) -> dict[str, Any]:
     """Compact alarm record for tool responses (the LLM sees speech slots too)."""
     nxt = alarm.next_pending(now)
     return {
@@ -845,7 +973,7 @@ def _alarm_summary(alarm: Alarm, now: datetime) -> dict[str, Any]:
         "kind": alarm.kind,
         "target": alarm.target,
         "time": alarm.time.strftime("%H:%M"),
-        "repeats": format_days(alarm.weekdays) if alarm.is_recurring else "once",
+        "repeats": _repeats(alarm, lang),
         "date": alarm.date.isoformat() if alarm.date else None,
         "next": nxt.isoformat() if nxt else None,
         "enabled": alarm.enabled,

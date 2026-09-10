@@ -10,7 +10,8 @@ from pathlib import Path
 from homeassistant.components import frontend, panel_custom
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
+from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.hass_dict import HassKey
 
@@ -23,6 +24,7 @@ from .http import (
     VoiceAlarmDefaultSoundView,
     VoiceAlarmStreamView,
 )
+from .i18n import set_default_language
 from .intents import async_register_intents, async_unregister_intents
 from .manager import AlarmManager
 from .services import async_register_services, async_unregister_services
@@ -77,6 +79,15 @@ async def _async_setup_shared(hass: HomeAssistant) -> None:
 async def async_setup_entry(hass: HomeAssistant, entry: VoiceAlarmsConfigEntry) -> bool:
     """Set up Voice Alarms from a config entry."""
     await _async_setup_shared(hass)
+
+    # Labels, the spoken "Reminder:" prefix and service errors follow the instance language.
+    set_default_language(hass.config.language)
+
+    @callback
+    def _config_updated(_event: Event) -> None:
+        set_default_language(hass.config.language)
+
+    entry.async_on_unload(hass.bus.async_listen(EVENT_CORE_CONFIG_UPDATE, _config_updated))
 
     manager = AlarmManager(hass, entry, hass.data[DATA_STREAMS], hass.data[DATA_LOOP])
     await manager.async_load()
