@@ -12,14 +12,23 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components import media_source
+from homeassistant.components import media_source, tts
+from homeassistant.components.assist_pipeline import async_get_pipeline, async_get_pipelines
 from homeassistant.components.assist_satellite import DOMAIN as ASSIST_SATELLITE_DOMAIN
+from homeassistant.components.assist_satellite.const import (
+    DATA_COMPONENT as SATELLITE_COMPONENT,
+)
 from homeassistant.components.media_player import (
+    ATTR_MEDIA_CONTENT_ID,
+    ATTR_MEDIA_CONTENT_TYPE,
     ATTR_MEDIA_VOLUME_LEVEL,
     ATTR_MEDIA_VOLUME_MUTED,
+    SERVICE_PLAY_MEDIA,
     SERVICE_VOLUME_MUTE,
     SERVICE_VOLUME_SET,
     MediaPlayerEntityFeature,
+    MediaPlayerState,
+    MediaType,
 )
 from homeassistant.components.media_player import (
     DOMAIN as MEDIA_PLAYER_DOMAIN,
@@ -27,7 +36,7 @@ from homeassistant.components.media_player import (
 from homeassistant.components.media_player.browse_media import (
     async_process_play_media_url,
 )
-from homeassistant.const import ATTR_ENTITY_ID, ATTR_SUPPORTED_FEATURES
+from homeassistant.const import ATTR_ENTITY_ID, ATTR_SUPPORTED_FEATURES, SERVICE_MEDIA_STOP
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -35,10 +44,13 @@ from homeassistant.util import dt as dt_util
 
 from .audio import RampSpec, stream_builtin, stream_ffmpeg
 from .const import (
+    ANNOUNCE_REFUSED_SECONDS,
     ANNOUNCE_RETRY_SECONDS,
     KIND_REMINDER,
     MAX_SEGMENT_SECONDS,
     MIN_PLAYBACK_FOR_DEVICE_STOP,
+    PLAYER_POLL_SECONDS,
+    PLAYER_START_TIMEOUT,
 )
 from .http import StreamRegistry, StreamSpec
 from .i18n import default_language, tr
@@ -112,6 +124,7 @@ class RingSession:
         self._wake = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._use_raw = False
+        self._via_player = False
         self._resolved_sound: str | None = None
         self._temp_file: str | None = None
 
@@ -224,6 +237,77 @@ class RingSession:
             context=self.context,
         )
 
+    def _refused(self, played: float, within: float = MIN_PLAYBACK_FOR_DEVICE_STOP) -> bool:
+        """Switch to the media player when the satellite refused the announcement.
+
+        A satellite in do not disturb ends announcements at once without
+        fetching them, while alarms and reminders must still sound;
+        media_player.play_media is not silenced by it.
+        """
+        if self._via_player or self.dismissed or played >= within:
+            return False
+        state = self.hass.states.get(self.target.media_player or "")
+        if state is None or not (
+            state.attributes.get(ATTR_SUPPORTED_FEATURES, 0) & MediaPlayerEntityFeature.PLAY_MEDIA
+        ):
+            return False
+        _LOGGER.info(
+            "%s did not play the announcement (do not disturb?); continuing through %s",
+            self.target.entity_id,
+            state.entity_id,
+        )
+        self._via_player = True
+        return True
+
+    async def _play_on_player(self, media_id: str, spec: StreamSpec | None = None) -> None:
+        """Play on the media player and wait until it is done, like a blocking announce."""
+        player = self.target.media_player
+        assert player
+        await self.hass.services.async_call(
+            MEDIA_PLAYER_DOMAIN,
+            SERVICE_PLAY_MEDIA,
+            {
+                ATTR_ENTITY_ID: player,
+                ATTR_MEDIA_CONTENT_ID: async_process_play_media_url(self.hass, media_id),
+                ATTR_MEDIA_CONTENT_TYPE: MediaType.MUSIC,
+            },
+            blocking=True,
+            context=self.context,
+        )
+        # The player reports "playing" until the audio is out; with a stream,
+        # its end is known too, so a player stuck in "playing" is not waited
+        # on forever.
+        since = time.monotonic()
+        deadline = since + MAX_SEGMENT_SECONDS + PLAYER_START_TIMEOUT
+        seen_playing = False
+        while not self.dismissed:
+            state = self.hass.states.get(player)
+            playing = state is not None and state.state == MediaPlayerState.PLAYING
+            if spec is not None:
+                if spec.opened and not (spec.finished or spec.client_gone or spec.error):
+                    since = time.monotonic()
+                elif spec.opened and not playing:
+                    return
+            elif playing:
+                seen_playing = True
+                since = time.monotonic()
+            elif seen_playing:
+                return
+            now = time.monotonic()
+            if now - since > PLAYER_START_TIMEOUT or now > deadline:
+                return
+            await self._sleep(PLAYER_POLL_SECONDS)
+        try:
+            await self.hass.services.async_call(
+                MEDIA_PLAYER_DOMAIN,
+                SERVICE_MEDIA_STOP,
+                {ATTR_ENTITY_ID: player},
+                blocking=True,
+                context=self.context,
+            )
+        except HomeAssistantError as err:
+            _LOGGER.debug("Could not stop %s: %s", player, err)
+
     async def _run_alarm(self) -> None:
         elapsed = 0.0
         failures = 0
@@ -233,6 +317,8 @@ class RingSession:
                 break
             if self._use_raw:
                 played = await self._play_raw_once()
+                if self._refused(played):
+                    continue
                 elapsed += played
                 if played < MIN_PLAYBACK_FOR_DEVICE_STOP and not self.dismissed:
                     failures += 1
@@ -250,7 +336,10 @@ class RingSession:
             self.registry.register(spec)
             started = time.monotonic()
             try:
-                await self._announce(media_id=spec.url)
+                if self._via_player:
+                    await self._play_on_player(spec.url, spec)
+                else:
+                    await self._announce(media_id=spec.url)
             except HomeAssistantError as err:
                 _LOGGER.warning("Announcing alarm on %s failed: %s", self.target.entity_id, err)
                 spec.error = spec.error or str(err)
@@ -263,6 +352,8 @@ class RingSession:
 
             if self.dismissed:
                 break
+            if not spec.opened and not spec.error and self._refused(played):
+                continue
             if spec.finished:
                 # The whole segment was delivered (the device is at most a
                 # couple of seconds of buffer behind), so account for the
@@ -325,24 +416,57 @@ class RingSession:
         for attempt in range(max(1, self.config.reminder_repeats)):
             if self.dismissed:
                 break
+            spoken = tr(default_language(), "spoken_reminder", text=text)
             try:
-                await self.hass.services.async_call(
-                    ASSIST_SATELLITE_DOMAIN,
-                    "announce",
-                    {
-                        ATTR_ENTITY_ID: self.target.entity_id,
-                        "message": tr(default_language(), "spoken_reminder", text=text),
-                        "preannounce": True,
-                    },
-                    blocking=True,
-                    context=self.context,
-                )
+                if not self._via_player:
+                    started = time.monotonic()
+                    await self.hass.services.async_call(
+                        ASSIST_SATELLITE_DOMAIN,
+                        "announce",
+                        {
+                            ATTR_ENTITY_ID: self.target.entity_id,
+                            "message": spoken,
+                            "preannounce": True,
+                        },
+                        blocking=True,
+                        context=self.context,
+                    )
+                    played = time.monotonic() - started
+                if self._via_player or self._refused(played, ANNOUNCE_REFUSED_SECONDS):
+                    await self._play_on_player(await self._speech_url(spoken))
             except HomeAssistantError as err:
                 _LOGGER.warning("Speaking reminder on %s failed: %s", self.target.entity_id, err)
             if attempt < self.config.reminder_repeats - 1:
                 await self._sleep(self.config.reminder_interval)
 
     # ------------------------------------------------------------------ audio
+
+    async def _speech_url(self, text: str) -> str:
+        """Synthesize text with the satellite's pipeline voice, as its announce would."""
+        satellite = self.hass.data[SATELLITE_COMPONENT].get_entity(self.target.entity_id)
+        pipeline_id = None
+        if satellite is not None and satellite.pipeline_entity_id:
+            selected = self.hass.states.get(satellite.pipeline_entity_id)
+            if selected is not None:
+                pipeline_id = next(
+                    (p.id for p in async_get_pipelines(self.hass) if p.name == selected.state),
+                    None,
+                )
+        pipeline = async_get_pipeline(self.hass, pipeline_id)
+        options: dict[str, Any] = {}
+        if pipeline.tts_voice is not None:
+            options[tts.ATTR_VOICE] = pipeline.tts_voice
+        if satellite is not None and satellite.tts_options:
+            options.update(satellite.tts_options)
+        media_id = tts.generate_media_source_id(
+            self.hass,
+            text,
+            engine=pipeline.tts_engine,
+            language=pipeline.tts_language,
+            options=options,
+        )
+        media = await media_source.async_resolve_media(self.hass, media_id, None)
+        return media.url
 
     def _make_spec(self, *, offset: float, duration: float) -> StreamSpec:
         sound = self.config.sound
@@ -413,7 +537,10 @@ class RingSession:
         started = time.monotonic()
         try:
             url = await self._resolve_sound()
-            await self._announce(media_id=url)
+            if self._via_player:
+                await self._play_on_player(url)
+            else:
+                await self._announce(media_id=url)
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("Playing alarm sound on %s failed: %s", self.target.entity_id, err)
         return time.monotonic() - started

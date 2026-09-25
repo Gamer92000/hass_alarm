@@ -70,6 +70,12 @@ MAX_SEGMENT_SECONDS: Final = 240
 # treated as playback errors rather than a deliberate stop on the device.
 MIN_PLAYBACK_FOR_DEVICE_STOP: Final = 3.0
 ANNOUNCE_RETRY_SECONDS: Final = 5.0
+# A spoken announcement (chime and text) that ends sooner was never played.
+ANNOUNCE_REFUSED_SECONDS: Final = 1.0
+# Ringing through media_player.play_media: how long the player gets to fetch
+# the stream, and how often its state is checked for the end of playback.
+PLAYER_START_TIMEOUT: Final = 10.0
+PLAYER_POLL_SECONDS: Final = 0.25
 RECENTLY_DISMISSED_SECONDS: Final = 180
 
 # Dispatcher signals

@@ -10,7 +10,13 @@ import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
 
-from custom_components.voice_alarms.const import CONF_ALARM_VOLUME, CONF_DEVICE_STOP_PAUSE, DOMAIN
+from custom_components.voice_alarms.const import (
+    CONF_ALARM_VOLUME,
+    CONF_DEVICE_STOP_PAUSE,
+    DOMAIN,
+    KIND_REMINDER,
+)
+from custom_components.voice_alarms.ringer import RingSession
 from homeassistant.components.assist_satellite import DOMAIN as SAT_DOMAIN
 from homeassistant.core import HomeAssistant, ServiceCall
 
@@ -91,6 +97,117 @@ async def test_device_stop_pause_then_resume(
     session.dismiss()
     await asyncio.wait_for(session.wait_finished(), 10)
     assert session.dismissed_by == "user"
+
+
+def _satellite_in_dnd(hass: HomeAssistant, client, player: str, chunks_before_stop: int):
+    """Fake satellite in do not disturb: announcements end at once, play_media plays."""
+    state = SimpleNamespace(announces=0, plays=[], stops=0, tasks=[])
+    hass.states.async_set(player, "idle", {"supported_features": 4 | 512, "volume_level": 0.4})
+
+    async def announce(call: ServiceCall) -> None:
+        state.announces += 1
+
+    async def fetch(url: str) -> None:
+        match = re.search(r"(/api/voice_alarms/stream/[^/]+\.flac)", url)
+        async with client.get(match.group(1)) as resp:
+            count = 0
+            async for _chunk in resp.content.iter_chunked(4096):
+                count += 1
+                if count >= chunks_before_stop:
+                    break
+        await asyncio.sleep(0.1)
+        hass.states.async_set(player, "idle", {"supported_features": 4 | 512})
+
+    async def play_media(call: ServiceCall) -> None:
+        state.plays.append(call.data)
+        hass.states.async_set(player, "playing", {"supported_features": 4 | 512})
+        state.tasks.append(hass.async_create_task(fetch(call.data["media_content_id"])))
+
+    async def media_stop(call: ServiceCall) -> None:
+        state.stops += 1
+
+    hass.services.async_register(SAT_DOMAIN, "announce", announce)
+    hass.services.async_register("media_player", "play_media", play_media)
+    hass.services.async_register("media_player", "media_stop", media_stop)
+    return state
+
+
+async def test_do_not_disturb_rings_through_media_player(
+    hass: HomeAssistant, satellites, manager, hass_client_no_auth: ClientSessionGenerator
+) -> None:
+    client = await hass_client_no_auth()
+    player = satellites["kitchen"]["media_player"]
+    device = _satellite_in_dnd(hass, client, player, 3)
+    target = manager.target(satellites["kitchen"]["satellite"])
+    session = await manager.async_ring(target, label="Wake up", duration=120)
+    await asyncio.wait_for(session.wait_finished(), 10)
+    assert device.announces == 1
+    assert len(device.plays) == 1
+    assert device.plays[0]["entity_id"] == player
+    assert "/api/voice_alarms/stream/" in device.plays[0]["media_content_id"]
+    assert session.dismissed_by == "device"
+
+
+async def test_do_not_disturb_dismiss_stops_player(
+    hass: HomeAssistant, satellites, manager, hass_client_no_auth: ClientSessionGenerator
+) -> None:
+    client = await hass_client_no_auth()
+    device = _satellite_in_dnd(hass, client, satellites["kitchen"]["media_player"], 10**6)
+    target = manager.target(satellites["kitchen"]["satellite"])
+    session = await manager.async_ring(target, label="Wake up", duration=120)
+    for _ in range(100):
+        if device.plays:
+            break
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.3)
+    session.dismiss()
+    await asyncio.wait_for(session.wait_finished(), 10)
+    await asyncio.wait_for(asyncio.gather(*device.tasks), 10)
+    assert session.dismissed_by == "user"
+    assert device.stops == 1
+
+
+async def test_do_not_disturb_speaks_reminder_through_media_player(
+    hass: HomeAssistant, satellites, manager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    player = satellites["kitchen"]["media_player"]
+    hass.states.async_set(player, "idle", {"supported_features": 4 | 512})
+    announces: list[ServiceCall] = []
+    plays: list[ServiceCall] = []
+    spoken: list[str] = []
+
+    async def announce(call: ServiceCall) -> None:
+        announces.append(call)
+
+    async def play_media(call: ServiceCall) -> None:
+        plays.append(call)
+        hass.states.async_set(player, "playing", {"supported_features": 4 | 512})
+        hass.loop.call_later(
+            0.1, hass.states.async_set, player, "idle", {"supported_features": 4 | 512}
+        )
+
+    async def speech_url(self, text: str) -> str:
+        spoken.append(text)
+        return "/api/tts_proxy/reminder.mp3"
+
+    hass.services.async_register(SAT_DOMAIN, "announce", announce)
+    hass.services.async_register("media_player", "play_media", play_media)
+    monkeypatch.setattr(RingSession, "_speech_url", speech_url)
+    target = manager.target(satellites["kitchen"]["satellite"])
+    session = await manager.async_ring(
+        target, kind=KIND_REMINDER, message="Take out the trash", label="Trash", origin="test"
+    )
+    for _ in range(100):
+        if plays and hass.states.get(player).state == "idle":
+            break
+        await asyncio.sleep(0.05)
+    session.dismiss()
+    await session.wait_finished()
+    assert len(announces) == 1
+    assert spoken == ["Reminder: Take out the trash"]
+    assert len(plays) == 1
+    assert plays[0].data["entity_id"] == player
+    assert plays[0].data["media_content_id"].endswith("/api/tts_proxy/reminder.mp3")
 
 
 async def test_volume_set_and_restored(
