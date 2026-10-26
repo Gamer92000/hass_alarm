@@ -66,9 +66,15 @@ STREAM_LEAD_SECONDS: Final = 2.0
 FFMPEG_RAMP_SEGMENTS: Final = 32
 # ESPHome waits at most 5 minutes for an announcement, so keep segments shorter.
 MAX_SEGMENT_SECONDS: Final = 240
-# Announcements that end faster than this after the stream was opened are
-# treated as playback errors rather than a deliberate stop on the device.
+# Announcements that end faster than this after the announce call are treated
+# as playback errors (or, with the stream never fetched, as refused).
 MIN_PLAYBACK_FOR_DEVICE_STOP: Final = 3.0
+# A stream the satellite fetched that ends faster than this after it was opened
+# is a playback error rather than a deliberate stop on the device: hearing the
+# ring and saying the wake word takes longer. Someone awake stops it sooner than
+# MIN_PLAYBACK_FOR_DEVICE_STOP, though: an Echo's log had "<wake word>, stop" cut
+# the ring 2.4 s after it was fetched, and every such stop rang again.
+MIN_HEARD_FOR_DEVICE_STOP: Final = 1.5
 ANNOUNCE_RETRY_SECONDS: Final = 5.0
 # A spoken announcement (chime and text) that ends sooner was never played.
 ANNOUNCE_REFUSED_SECONDS: Final = 1.0

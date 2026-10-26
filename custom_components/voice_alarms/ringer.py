@@ -48,6 +48,7 @@ from .const import (
     ANNOUNCE_RETRY_SECONDS,
     KIND_REMINDER,
     MAX_SEGMENT_SECONDS,
+    MIN_HEARD_FOR_DEVICE_STOP,
     MIN_PLAYBACK_FOR_DEVICE_STOP,
     PLAYER_POLL_SECONDS,
     PLAYER_START_TIMEOUT,
@@ -348,7 +349,11 @@ class RingSession:
                 spec.error = spec.error or "announce failed"
             finally:
                 self.registry.unregister(spec.token)
-            played = time.monotonic() - started
+            ended = time.monotonic()
+            played = ended - started
+            # The satellite fetches the stream a moment after the call; what it
+            # could have played counts from then.
+            heard = ended - spec.opened_at if spec.opened_at is not None else 0.0
 
             if self.dismissed:
                 break
@@ -376,7 +381,7 @@ class RingSession:
                 self._use_raw = True
                 continue
 
-            if spec.error or not spec.opened or played < MIN_PLAYBACK_FOR_DEVICE_STOP:
+            if spec.error or not spec.opened or heard < MIN_HEARD_FOR_DEVICE_STOP:
                 failures += 1
                 if failures > 5:
                     _LOGGER.error(

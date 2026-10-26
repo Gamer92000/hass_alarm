@@ -97,7 +97,9 @@ intents `VoiceAlarmSet`, `VoiceAlarmList`, `VoiceAlarmDelete`, `VoiceAlarmSkipNe
 On Home Assistant Voice PE the wake word, the built-in "stop" word and the button stop the
 announcement on the device itself. By default the integration treats that as dismissing
 the alarm. If you prefer "silence for a moment, then ring again unless dismissed", set
-*resume ringing after* in the options to a number of seconds.
+*resume ringing after* in the options to a number of seconds. Playback that ends within
+1.5 s of the satellite fetching the sound counts as a playback error, not a stop, and the
+alarm rings again 5 s later.
 
 ## How ringing works
 

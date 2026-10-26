@@ -24,10 +24,13 @@ from homeassistant.core import HomeAssistant, ServiceCall
 @pytest.fixture(autouse=True)
 def fast_device_stop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("custom_components.voice_alarms.ringer.MIN_PLAYBACK_FOR_DEVICE_STOP", 0.05)
+    monkeypatch.setattr("custom_components.voice_alarms.ringer.MIN_HEARD_FOR_DEVICE_STOP", 0.05)
     monkeypatch.setattr("custom_components.voice_alarms.ringer.ANNOUNCE_RETRY_SECONDS", 0.05)
 
 
-def _device_that_stops(hass: HomeAssistant, client, chunks_before_stop: int) -> SimpleNamespace:
+def _device_that_stops(
+    hass: HomeAssistant, client, chunks_before_stop: int, playing: float = 0.1
+) -> SimpleNamespace:
     """Fake satellite that plays a few chunks, then stops (button / stop word)."""
     state = SimpleNamespace(calls=0)
 
@@ -40,7 +43,7 @@ def _device_that_stops(hass: HomeAssistant, client, chunks_before_stop: int) -> 
                 count += 1
                 if count >= chunks_before_stop:
                     break
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(playing)
 
     hass.services.async_register(SAT_DOMAIN, "announce", announce)
     return state
@@ -57,6 +60,47 @@ async def test_device_stop_dismisses(
     assert device.calls == 1
     assert session.dismissed_by == "device"
     assert not session.active
+
+
+async def test_quick_device_stop_dismisses(
+    hass: HomeAssistant,
+    satellites,
+    manager,
+    hass_client_no_auth: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stop sooner than MIN_PLAYBACK_FOR_DEVICE_STOP after the call still dismisses.
+
+    Someone awake says "<wake word>, stop" 2.5 s into the ring; that was taken
+    for a playback error and the alarm rang again.
+    """
+    monkeypatch.setattr("custom_components.voice_alarms.ringer.MIN_PLAYBACK_FOR_DEVICE_STOP", 1.0)
+    monkeypatch.setattr("custom_components.voice_alarms.ringer.MIN_HEARD_FOR_DEVICE_STOP", 0.2)
+    client = await hass_client_no_auth()
+    device = _device_that_stops(hass, client, 3, playing=0.5)
+    target = manager.target(satellites["kitchen"]["satellite"])
+    session = await manager.async_ring(target, label="Stop me", duration=120)
+    await asyncio.wait_for(session.wait_finished(), 10)
+    assert device.calls == 1
+    assert session.dismissed_by == "device"
+
+
+async def test_stream_dropped_at_once_rings_again(
+    hass: HomeAssistant,
+    satellites,
+    manager,
+    hass_client_no_auth: ClientSessionGenerator,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stream fetched and let go of at once is a playback error, not a stop."""
+    monkeypatch.setattr("custom_components.voice_alarms.ringer.MIN_HEARD_FOR_DEVICE_STOP", 0.5)
+    client = await hass_client_no_auth()
+    device = _device_that_stops(hass, client, 1, playing=0)
+    target = manager.target(satellites["kitchen"]["satellite"])
+    session = await manager.async_ring(target, label="Broken", duration=120)
+    await asyncio.wait_for(session.wait_finished(), 10)
+    assert device.calls == 6  # the first try and five retries, then it gives up
+    assert session.dismissed_by is None
 
 
 async def test_device_stop_pause_then_resume(
