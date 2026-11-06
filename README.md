@@ -37,8 +37,8 @@ supported.
   An alarm whose satellite is offline (unavailable in Home Assistant, and its media player too)
   waits for it within that period. Satellites that do not report being offline, such as
   Wyoming ones, cannot be waited for.
-- English and German throughout: panel, config flow, entities, services and the spoken
-  responses.
+- English, German and Brazilian Portuguese throughout: panel, config flow, entities,
+  services and the spoken responses.
 
 ## Installation
 
@@ -85,12 +85,18 @@ The tool responses are precise sentences such as
 *"Created repeating alarm 'work' at 06:30 weekdays on Kitchen, next tomorrow (Tuesday 8
 September) at 06:30 (in 20 hours and 12 minutes)."* and the LLM is instructed to relay them.
 
-Responses are given in the language of the conversation. English and German are built in;
-any other language gets English, which the LLM translates. The parsers also understand
-German words (*morgen*, *übermorgen*, *wochentags*, *montag*, *7 Uhr*, …). Everything tied
+Responses are given in the language of the conversation. English, German and Portuguese
+are built in; any other language gets English, which the LLM translates. Portuguese replies
+say times in words ("às sete e meia", "à uma hora"), because text-to-speech reads "07:30"
+digit by digit there. The parsers also
+understand German words (*morgen*, *übermorgen*, *wochentags*, *montag*, *7 Uhr*, …) and
+Portuguese ones (*amanhã*, *depois de amanhã*, *dias úteis*, *segunda*, *7 da manhã*,
+*meio-dia*, …). Everything tied
 to the instance rather than to a conversation follows the Home Assistant language setting:
-the default alarm labels ("Wecker 07:00"), the spoken *Erinnerung:* prefix of reminders,
-snooze names and service errors.
+the default alarm labels in the panel ("Wecker 07:00"; a reply names them in the language
+of the conversation), snooze names and service errors. The spoken
+*Erinnerung:* prefix of reminders is in the language of the satellite's pipeline, the voice
+that speaks it.
 
 The built-in (non-LLM) Assist agent does not have sentences for these intents out of the
 box. You can add your own under `custom_sentences/<lang>/voice_alarms.yaml` targeting the

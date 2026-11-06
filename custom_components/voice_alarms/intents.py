@@ -31,7 +31,7 @@ from .const import (
     RECENTLY_DISMISSED_SECONDS,
     WEEKDAY_CODES,
 )
-from .i18n import LocalizedError, normalize_language, tr
+from .i18n import LocalizedError, format_clock, normalize_language, tr
 from .manager import AlarmManager
 from .models import (
     Alarm,
@@ -229,6 +229,7 @@ class _VoiceAlarmIntent(intent.IntentHandler):
                     a
                     for a in alarms
                     if lowered in a.label.lower()
+                    or lowered in a.label_in(self._lang(intent_obj)).lower()
                     or (a.message and lowered in a.message.lower())
                     or (a.name and a.name.lower() in lowered)
                 ]
@@ -540,7 +541,7 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
                 "alarms": [
                     {
                         "alarm_id": alarm.id,
-                        "label": alarm.label,
+                        "label": alarm.label_in(lang),
                         "kind": alarm.kind,
                         "target": alarm.target,
                         "rings_at": at.isoformat(),
@@ -642,7 +643,12 @@ class SkipNextIntent(_VoiceAlarmIntent):
             if candidates and not on_day:
                 later = join_list(
                     [
-                        tr(lang, "rings_next", label=a.label, when=format_when(nxt, now, lang))
+                        tr(
+                            lang,
+                            "rings_next",
+                            label=a.label_in(lang),
+                            when=format_when(nxt, now, lang),
+                        )
                         for a in candidates
                         if (nxt := _next_ring(a, now)) is not None
                     ],
@@ -670,13 +676,13 @@ class SkipNextIntent(_VoiceAlarmIntent):
         where = self._where(alarm)
         if undo:
             if alarm.skipped_occurrence is None:
-                raise IntentFailed("err_no_skipped", label=alarm.label, where=where)
+                raise IntentFailed("err_no_skipped", label=alarm.label_in(lang), where=where)
             alarm, restored = await self.manager.async_skip_next(alarm.id, undo=True)
             nxt = alarm.next_pending(now)
             text = tr(
                 lang,
                 "reinstated",
-                label=alarm.label,
+                label=alarm.label_in(lang),
                 where=where,
                 when=f" {format_when(restored, now, lang)}" if restored else "",
             )
@@ -698,7 +704,7 @@ class SkipNextIntent(_VoiceAlarmIntent):
             nxt = alarm.next_pending(now)
             raise IntentFailed(
                 "err_already_skipped",
-                label=alarm.label,
+                label=alarm.label_in(lang),
                 where=where,
                 when=format_when(scheduled, now, lang),
                 next=tr(
@@ -715,7 +721,7 @@ class SkipNextIntent(_VoiceAlarmIntent):
         text = tr(
             lang,
             "skipping",
-            label=alarm.label,
+            label=alarm.label_in(lang),
             where=where,
             when=f" {format_when(skipped, now, lang)}" if skipped else "",
         )
@@ -903,7 +909,7 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
         if "time" in changes:
             times = sorted({c["time"] for _, c in updates})
             described[0] = tr(
-                lang, "change_time", time=join_list([t.strftime("%H:%M") for t in times], lang)
+                lang, "change_time", time=join_list([format_clock(t, lang) for t in times], lang)
             )
         # All or nothing: one invalid change must not leave the others half done.
         updated = await self.manager.async_update_alarms(updates)
@@ -997,7 +1003,7 @@ class DismissIntent(_VoiceAlarmIntent):
                     tr(
                         lang,
                         "snooze_at",
-                        time=dt_util.as_local(nxt).strftime("%H:%M"),
+                        time=format_clock(dt_util.as_local(nxt).time(), lang, "at"),
                         relative=format_relative(nxt, now, lang),
                     )
                     if nxt
@@ -1025,7 +1031,20 @@ class DismissIntent(_VoiceAlarmIntent):
         response.async_set_speech_slots({"stopped": [s.target.entity_id for s in sessions]})
 
 
-_ONCE_WORDS = ("none", "never", "once", "one-time", "one time", "nie", "einmal", "einmalig")
+_ONCE_WORDS = (
+    "none",
+    "never",
+    "once",
+    "one-time",
+    "one time",
+    "nie",
+    "einmal",
+    "einmalig",
+    "nunca",
+    "uma vez",
+    "uma vez só",
+    "só uma vez",
+)
 
 
 def _repeats(alarm: Alarm, lang: str) -> str:
@@ -1037,7 +1056,7 @@ def _describe_session(session: RingSession, lang: str) -> str:
         lang,
         "session",
         kind=tr(lang, f"the_{session.kind}"),
-        label=session.label,
+        label=session.alarms[0].label_in(lang) if session.alarms else session.label,
         target=session.target.display,
         state=tr(lang, "paused") if session.state == STATE_PAUSED else "",
     )
@@ -1048,7 +1067,7 @@ def _alarm_summary(alarm: Alarm, now: datetime, lang: str) -> dict[str, Any]:
     nxt = alarm.next_pending(now)
     return {
         "alarm_id": alarm.id,
-        "label": alarm.label,
+        "label": alarm.label_in(lang),
         "kind": alarm.kind,
         "target": alarm.target,
         "time": alarm.time.strftime("%H:%M"),

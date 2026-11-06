@@ -84,10 +84,7 @@ async def test_set_with_named_target_and_date(hass: HomeAssistant, ready, satell
     alarm = ready.get_alarm(response.speech_slots["alarm_id"])
     assert alarm.target == satellites["bedroom"]["satellite"]
     assert alarm.date.isoformat() == "2026-09-11"
-    assert (
-        "one-time alarm 'Alarm 06:30' at 06:30 on Friday 11 September on Voice PE Bedroom"
-        in speech(response)
-    )
+    assert "one-time alarm at 06:30 on Friday 11 September on Voice PE Bedroom" in speech(response)
 
 
 async def test_set_reminder(hass: HomeAssistant, ready, satellites) -> None:
@@ -599,7 +596,7 @@ async def test_list_for_a_day(hass: HomeAssistant, ready, satellites) -> None:
     response = await handle(hass, INTENT_LIST, bedroom, date="saturday", target="bedroom")
     assert speech(response) == (
         "There are no alarms or reminders on Saturday 12 September on Voice PE Bedroom. "
-        "The next one is the repeating alarm 'Alarm 08:50' at 08:50 weekdays on Voice PE "
+        "The next one is the repeating alarm at 08:50 weekdays on Voice PE "
         "Bedroom, next tomorrow (Tuesday 8 September) at 08:50 (in 22 hours and 50 minutes)."
     )
 

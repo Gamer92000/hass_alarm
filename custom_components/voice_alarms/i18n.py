@@ -2,20 +2,47 @@
 
 Everything the integration says or shows outside Home Assistant's own translation
 system (``translations/*.json``) comes from the tables below. Intent responses use
-the language of the conversation (``intent.language``); the default label of an
-alarm, the spoken "Reminder:" prefix and service errors use the instance language
-(``hass.config.language``), which ``set_default_language`` records at setup.
+the language of the conversation (``intent.language``), the default label of an
+unnamed alarm included; elsewhere that label and service errors use the instance
+language (``hass.config.language``), which ``set_default_language`` records at setup.
+The spoken "Reminder:" prefix uses the language of the satellite's pipeline, whose
+voice speaks it.
 """
 
 from __future__ import annotations
 
-from typing import Any, Final
+from datetime import time
+from typing import Any, Final, Literal
 
 DEFAULT_LANGUAGE: Final = "en"
 
 WEEKDAYS: Final[dict[str, list[str]]] = {
     "en": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
     "de": ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"],
+    "pt": [
+        "segunda-feira",
+        "terça-feira",
+        "quarta-feira",
+        "quinta-feira",
+        "sexta-feira",
+        "sábado",
+        "domingo",
+    ],
+}
+
+# Weekdays as they read in a repeating schedule, for languages where that is not the
+# plain name. Portuguese gives each day its own article ('às segundas', 'aos sábados'),
+# so no single 'every {days}' template fits.
+RECURRING_WEEKDAYS: Final[dict[str, list[str]]] = {
+    "pt": [
+        "às segundas",
+        "às terças",
+        "às quartas",
+        "às quintas",
+        "às sextas",
+        "aos sábados",
+        "aos domingos",
+    ],
 }
 
 MONTHS: Final[dict[str, list[str]]] = {
@@ -46,6 +73,20 @@ MONTHS: Final[dict[str, list[str]]] = {
         "Oktober",
         "November",
         "Dezember",
+    ],
+    "pt": [
+        "janeiro",
+        "fevereiro",
+        "março",
+        "abril",
+        "maio",
+        "junho",
+        "julho",
+        "agosto",
+        "setembro",
+        "outubro",
+        "novembro",
+        "dezembro",
     ],
 }
 
@@ -92,6 +133,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "spoken_reminder": "Reminder: {text}",
         "snoozed_name": "{label} (snoozed)",
         "alarm_desc": "{kind} '{label}' at {schedule}",
+        "alarm_desc_unnamed": "{kind} at {schedule}",
         "alarm_desc_saying": " saying '{message}'",
         "alarm_desc_on": " on {where}",
         "alarm_desc_disabled": " (disabled)",
@@ -247,6 +289,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "spoken_reminder": "Erinnerung: {text}",
         "snoozed_name": "{label} (Schlummern)",
         "alarm_desc": "{kind} '{label}' um {schedule}",
+        "alarm_desc_unnamed": "{kind} um {schedule}",
         "alarm_desc_saying": " mit dem Text '{message}'",
         "alarm_desc_on": " auf {where}",
         "alarm_desc_disabled": " (deaktiviert)",
@@ -361,6 +404,159 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "err_date_invalid": "'{text}' ist kein gültiges Datum",
         "err_date_format": "'{text}' ist kein gültiges Datum, verwende JJJJ-MM-TT",
     },
+    "pt": {
+        "and": " e ",
+        "days_every_day": "todos os dias",
+        "days_weekdays": "nos dias úteis",
+        "days_weekends": "nos fins de semana",
+        "days_every": "{days}",
+        "rel_waiting": "assim que o satélite voltar",
+        "rel_under_minute": "em menos de um minuto",
+        "rel_in": "em {a}",
+        "rel_in_two": "em {a} e {b}",
+        "unit_day": "{n} dia",
+        "unit_days": "{n} dias",
+        "unit_hour": "{n} hora",
+        "unit_hours": "{n} horas",
+        "unit_minute": "{n} minuto",
+        "unit_minutes": "{n} minutos",
+        "unit_seconds": "{n} segundos",
+        "long_day": "{weekday}, {day} de {month}",
+        "long_day_year": "{weekday}, {day} de {month} de {year}",
+        "day_today": "hoje",
+        "day_tomorrow": "amanhã ({day})",
+        "day_on": "{day}",
+        "when_at": "{day} {time}",
+        "schedule_recurring": "{time} {days}",
+        "schedule_date": "{time} de {day}",
+        "kind_alarm": "alarme",
+        "kind_reminder": "lembrete",
+        "kind_alarm_repeating": "alarme recorrente",
+        "kind_alarm_once": "alarme único",
+        "kind_reminder_repeating": "lembrete recorrente",
+        "kind_reminder_once": "lembrete único",
+        "the_alarm": "o alarme",
+        "the_reminder": "o lembrete",
+        "The_alarm": "O alarme",
+        "The_reminder": "O lembrete",
+        "label_alarm": "Alarme",
+        "label_reminder": "Lembrete",
+        "spoken_reminder": "Lembrete: {text}",
+        "snoozed_name": "{label} (soneca)",
+        "alarm_desc": "{kind} '{label}' {schedule}",
+        "alarm_desc_unnamed": "{kind} {schedule}",
+        "alarm_desc_saying": " com a mensagem '{message}'",
+        "alarm_desc_on": " em {where}",
+        "alarm_desc_disabled": " (desativado)",
+        "alarm_desc_skipping": ", pulando {when}",
+        "alarm_desc_next": ", próxima vez {when} ({relative})",
+        "alarm_desc_past": " (já passou)",
+        "brief_reminder": "um lembrete '{label}' {time}",
+        "brief_skipped": "pulado",
+        "paused": " (pausado)",
+        "session": "{kind} '{label}' em {target}{state}",
+        "none_configured": "nenhum configurado",
+        "id_suffix": " [id {alarm_id}]",
+        "err_unknown_satellite": (
+            "Não conheço nenhum satélite de voz chamado '{query}'. Satélites disponíveis: {names}."
+        ),
+        "err_ambiguous_satellite": "'{query}' corresponde a vários satélites: {names}. Qual deles?",
+        "err_no_current_satellite": (
+            "Não sei qual satélite de voz você está usando, diga o nome do satélite. "
+            "Satélites disponíveis: {names}."
+        ),
+        "err_no_alarm_id": "Não há nenhum alarme com o id {alarm_id}.",
+        "err_none_configured": "Não há alarmes nem lembretes configurados.",
+        "err_no_match": "Nenhum alarme corresponde. Configurados: {all}.",
+        "err_which_one": "{count} alarmes correspondem, qual deles devo {verb}? {all}.",
+        "verb_delete": "apagar",
+        "verb_skip": "pular",
+        "verb_reinstate": "restaurar",
+        "verb_change": "alterar",
+        "err_invalid_input": "Entrada inválida: {error}",
+        "err_date_and_weekdays": (
+            "Um alarme se repete em dias da semana ou toca uma vez numa data, não as duas "
+            "coisas. Tire a data; um alarme recorrente começa na próxima ocorrência."
+        ),
+        "created": "Criado: {alarm}.",
+        "repeats_once": "uma vez",
+        "scope_on": " em {names}",
+        "list_none": "Não há alarmes nem lembretes configurados{scope}.",
+        "list_have": "Você tem {count} {noun}{scope}: {listing}.",
+        "noun_alarm": "alarme",
+        "noun_alarms": "alarmes",
+        "list_ringing": "Tocando agora: {list}.",
+        "day_none": "Não há alarmes nem lembretes para {when}{scope}.",
+        "day_next": " O próximo é o {alarm}.",
+        "day_have": "Para {when} você tem {count} {noun}{scope}: {segments}.",
+        "segment_on": "{items} em {target}",
+        "err_delete_none": "Não há alarmes para apagar.",
+        "err_delete_which": (
+            "Há {count} alarmes, qual deles devo apagar? {all}. Diga all=true para apagar todos."
+        ),
+        "deleted": "Apaguei: {list}.",
+        "rings_next": "o próximo toque de '{label}' é {when}",
+        "err_skip_only_next": "Só consigo pular o próximo toque: {later}.",
+        "err_no_skipped": "O alarme '{label}' em {where} não tem nenhum toque pulado.",
+        "reinstated": "Restaurei o alarme '{label}' em {where}{when}",
+        "rings_next_clause": "; o próximo toque é {when} ({relative})",
+        "err_already_skipped": "O alarme '{label}' em {where} {when} já está pulado{next}.",
+        "skipping": "Vou pular o alarme '{label}' em {where}{when}",
+        "rings_next_sentence": ". O próximo toque é {when} ({relative})",
+        "err_none_skipped": "Nenhum dos alarmes correspondentes tem um toque pulado.",
+        "skip_segment": "{items} em {where} {day}",
+        "skip_many": "Vou pular {count} alarmes: {segments}.",
+        "reinstate_many": "Restaurei {count} alarmes: {segments}.",
+        "next_ring": " O próximo toque é {when} ({relative}).",
+        "err_update_none": "Não há alarmes para alterar.",
+        "change_time": "horário alterado para {time}",
+        "change_once": "agora toca uma vez só",
+        "change_repeat": "agora toca {days}",
+        "change_date": "data alterada para {date}",
+        "change_name": "nome alterado para '{name}'",
+        "change_message": "mensagem alterada para '{message}'",
+        "change_target": "satélite alterado para {target}",
+        "change_enabled": "ativado",
+        "change_disabled": "desativado",
+        "change_duration": "duração do toque alterada para {minutes} minutos",
+        "err_nothing_to_change": (
+            "Nada para alterar: informe um novo horário, novos dias, um novo nome, um novo "
+            "satélite ou enabled."
+        ),
+        "changed_one": "Pronto: {changes}. Ficou assim: {alarm}.",
+        "changed_many": "Pronto: {changes} em {count} alarmes. Ficaram assim: {alarms}.",
+        "err_nothing_ringing_on": "Nada está tocando em {target}.",
+        "err_nothing_ringing_recent": "Nada está tocando agora. {kind} '{label}' em {target} {how}.",
+        "how_device": "foi parado no dispositivo há {ago} segundos",
+        "how_user": "já foi desligado há {ago} segundos",
+        "how_snooze": "foi adiado há {ago} segundos",
+        "how_other": "parou há {ago} segundos",
+        "err_nothing_ringing": "Nada está tocando agora.",
+        "snooze_at": " {time} ({relative})",
+        "snooze_item": "{session}, toca de novo{when}",
+        "snoozed": "Adiei {list}.",
+        "stopped": "Parei {list}.",
+        "err_unknown_target": "Satélite de voz desconhecido: '{target}'",
+        "err_time_past": "Esse horário já passou",
+        "err_duration": "A duração deve ser de pelo menos 1 segundo",
+        "err_no_such_alarm": "Nenhum alarme com o id {alarm_id}",
+        "err_unknown_field": "Campo desconhecido: {field}",
+        "err_skip_not_recurring": (
+            "Só alarmes recorrentes podem pular um toque; apague este em vez disso"
+        ),
+        "err_snooze_minutes": "A soneca deve durar entre 1 minuto e 24 horas",
+        "err_invalid_sound": (
+            "'{sound}' não é um som válido: use uma URL http(s), um caminho começando com / "
+            "ou um id media-source://"
+        ),
+        "err_nothing_to_update": "Nada para alterar",
+        "err_time_format": "'{text}' não é um horário válido, use HH:MM no formato 24 horas",
+        "err_time_invalid": "'{text}' não é um horário válido",
+        "err_weekday": "'{text}' não é um dia da semana",
+        "err_weekday_int": "'{text}' não é um dia da semana (use 0=segunda-feira .. 6=domingo)",
+        "err_date_invalid": "'{text}' não é uma data válida",
+        "err_date_format": "'{text}' não é uma data válida, use AAAA-MM-DD",
+    },
 }
 
 SUPPORTED_LANGUAGES: Final = tuple(STRINGS)
@@ -394,6 +590,60 @@ def tr(language: str, key: str, **params: Any) -> str:
     if template is None:
         template = STRINGS[DEFAULT_LANGUAGE][key]
     return template.format(**params) if params else template
+
+
+ClockForm = Literal["bare", "at", "of"]
+
+_PT_UNITS = (
+    "zero um dois três quatro cinco seis sete oito nove dez onze doze treze catorze quinze "
+    "dezesseis dezessete dezoito dezenove"
+).split()
+_PT_TENS = {20: "vinte", 30: "trinta", 40: "quarenta", 50: "cinquenta"}
+
+
+def _pt_number(n: int, *, feminine: bool = False) -> str:
+    """0..59 in words; hours are feminine ('uma', 'duas'), minutes masculine."""
+    if n < 20:
+        word = _PT_UNITS[n]
+    else:
+        tens, unit = divmod(n, 10)
+        word = _PT_TENS[tens * 10] + (f" e {_PT_UNITS[unit]}" if unit else "")
+    if feminine and word.endswith("um"):
+        return word + "a"
+    if feminine and word.endswith("dois"):
+        return word.removesuffix("dois") + "duas"
+    return word
+
+
+def _pt_clock(at: time, form: ClockForm) -> str:
+    """'às três horas', 'à uma e meia', 'ao meio-dia e quinze minutos', ..."""
+    if at.hour in (0, 12):
+        hour = "meia-noite" if at.hour == 0 else "meio-dia"
+        article = "a" if at.hour == 0 else "o"
+    else:
+        hour = f"{_pt_number(at.hour, feminine=True)} hora{'s' if at.hour > 1 else ''}"
+        article = "a" if at.hour == 1 else "as"
+    if at.minute == 30:
+        hour = hour.removesuffix(" horas").removesuffix(" hora") + " e meia"
+    elif at.minute:
+        hour += f" e {_pt_number(at.minute)} minuto{'s' if at.minute > 1 else ''}"
+    if form == "at":
+        return {"a": "à", "o": "ao", "as": "às"}[article] + " " + hour
+    if form == "of":
+        return {"a": "da", "o": "do", "as": "das"}[article] + " " + hour
+    return hour
+
+
+def format_clock(at: time, language: str, form: ClockForm = "bare") -> str:
+    """A clock time as it is said: '07:00', or in Portuguese 'às sete horas'.
+
+    Text-to-speech reads '03:00' digit by digit in Portuguese, and the hour's preposition
+    agrees with it ('à uma', 'às duas', 'ao meio-dia'), so Portuguese gets words and the
+    templates leave the preposition to ``form``: 'at' for 'at 07:00', 'of' for a label.
+    """
+    if language == "pt":
+        return _pt_clock(at, form)
+    return at.strftime("%H:%M")
 
 
 class LocalizedError(Exception):

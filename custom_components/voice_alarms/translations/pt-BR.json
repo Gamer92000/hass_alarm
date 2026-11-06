@@ -1,0 +1,143 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Voice Alarms",
+        "description": "Alarmes e lembretes para os seus satélites de voz. Todas as configurações podem ser alteradas depois; a curva da rampa de volume é editada no painel do Voice Alarms.",
+        "data": {
+          "default_duration": "Duração do toque",
+          "ramp_seconds": "Tempo de subida do volume",
+          "ramp_start": "Nível inicial da rampa de volume",
+          "alarm_volume": "Volume do satélite enquanto toca (deixe vazio para manter o volume atual)",
+          "default_sound": "Som do alarme (URL ou id de media-source, vazio = som embutido)",
+          "reminder_repeats": "Quantas vezes um lembrete é falado",
+          "reminder_interval": "Pausa entre as repetições de um lembrete",
+          "missed_grace": "Tocar mesmo assim um alarme perdido há no máximo",
+          "device_stop_pause": "Quando o alarme é parado no próprio dispositivo, voltar a tocar depois de (0 = considerar desligado)",
+          "twelve_hour": "Entender um horário dito sem manhã ou noite (“às 8”, “às 7h30”) como o que vier primeiro, de manhã ou à noite"
+        }
+      }
+    },
+    "error": {
+      "invalid_sound": "Use uma URL http(s), um caminho começando com / ou um id media-source://."
+    },
+    "abort": {
+      "single_instance_allowed": "O Voice Alarms já está configurado.",
+      "already_configured": "O Voice Alarms já está configurado."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configurações do Voice Alarms",
+        "description": "A curva da rampa de volume (com prévia) é editada no painel do Voice Alarms, na barra lateral.",
+        "data": {
+          "default_duration": "Duração do toque",
+          "ramp_seconds": "Tempo de subida do volume",
+          "ramp_start": "Nível inicial da rampa de volume",
+          "alarm_volume": "Volume do satélite enquanto toca (deixe vazio para manter o volume atual)",
+          "default_sound": "Som do alarme (URL ou id de media-source, vazio = som embutido)",
+          "reminder_repeats": "Quantas vezes um lembrete é falado",
+          "reminder_interval": "Pausa entre as repetições de um lembrete",
+          "missed_grace": "Tocar mesmo assim um alarme perdido há no máximo",
+          "device_stop_pause": "Quando o alarme é parado no próprio dispositivo, voltar a tocar depois de (0 = considerar desligado)",
+          "twelve_hour": "Entender um horário dito sem manhã ou noite (“às 8”, “às 7h30”) como o que vier primeiro, de manhã ou à noite"
+        }
+      }
+    },
+    "error": {
+      "invalid_sound": "Use uma URL http(s), um caminho começando com / ou um id media-source://."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "next_alarm": { "name": "Próximo alarme" }
+    },
+    "binary_sensor": {
+      "ringing": { "name": "Tocando" }
+    },
+    "button": {
+      "dismiss": { "name": "Desligar alarme" },
+      "test": { "name": "Testar som do alarme" }
+    }
+  },
+  "services": {
+    "add_alarm": {
+      "name": "Adicionar alarme",
+      "description": "Cria um alarme ou um lembrete num satélite de voz.",
+      "fields": {
+        "target": { "name": "Satélite", "description": "O satélite do Assist em que o alarme toca." },
+        "time": { "name": "Horário", "description": "Horário no formato 24 horas, por exemplo 06:30." },
+        "date": { "name": "Data", "description": "Data de um alarme único (AAAA-MM-DD, today, tomorrow, nome do dia da semana). Ignorada quando há dias da semana." },
+        "weekdays": { "name": "Repetir em", "description": "Dias da semana (mon..sun) de um alarme recorrente. Deixe vazio para um alarme único." },
+        "name": { "name": "Nome", "description": "Nome do alarme." },
+        "message": { "name": "Mensagem", "description": "Texto a ser falado. Faz disso um lembrete em vez de um alarme." },
+        "kind": { "name": "Tipo", "description": "alarm ou reminder (deduzido da mensagem quando não informado)." },
+        "duration": { "name": "Duração do toque", "description": "Segundos que o som do alarme toca. O padrão é a configuração da integração." },
+        "sound": { "name": "Som", "description": "URL ou id de media-source de um som próprio para este alarme." },
+        "enabled": { "name": "Ativado", "description": "Se o alarme está ativo." }
+      }
+    },
+    "update_alarm": {
+      "name": "Alterar alarme",
+      "description": "Altera um alarme existente.",
+      "fields": {
+        "alarm_id": { "name": "Id do alarme", "description": "Id do alarme." },
+        "target": { "name": "Satélite", "description": "Move o alarme para este satélite." },
+        "time": { "name": "Horário", "description": "Novo horário (HH:MM)." },
+        "date": { "name": "Data", "description": "Nova data de um alarme único." },
+        "weekdays": { "name": "Repetir em", "description": "Novos dias da semana; uma lista vazia torna o alarme único." },
+        "name": { "name": "Nome", "description": "Novo nome." },
+        "message": { "name": "Mensagem", "description": "Novo texto do lembrete." },
+        "kind": { "name": "Tipo", "description": "alarm ou reminder." },
+        "duration": { "name": "Duração do toque", "description": "Segundos que o som do alarme toca." },
+        "sound": { "name": "Som", "description": "Som próprio para este alarme." },
+        "enabled": { "name": "Ativado", "description": "Ativa ou desativa o alarme." }
+      }
+    },
+    "delete_alarm": {
+      "name": "Apagar alarme",
+      "description": "Apaga um alarme.",
+      "fields": {
+        "alarm_id": { "name": "Id do alarme", "description": "Id do alarme." }
+      }
+    },
+    "skip_next": {
+      "name": "Pular o próximo toque",
+      "description": "Pula só o próximo toque de um alarme recorrente (ou o restaura).",
+      "fields": {
+        "alarm_id": { "name": "Id do alarme", "description": "Id do alarme." },
+        "undo": { "name": "Desfazer", "description": "Restaura o toque pulado." }
+      }
+    },
+    "dismiss": {
+      "name": "Desligar",
+      "description": "Para um alarme ou lembrete que está tocando.",
+      "fields": {
+        "target": { "name": "Satélite", "description": "Para só o alarme deste satélite. Deixe vazio para parar todos." }
+      }
+    },
+    "snooze": {
+      "name": "Soneca",
+      "description": "Para um alarme que está tocando e o faz tocar de novo em alguns minutos.",
+      "fields": {
+        "target": { "name": "Satélite", "description": "Soneca só para o alarme deste satélite. Deixe vazio para todos." },
+        "minutes": { "name": "Minutos", "description": "Minutos até tocar de novo." }
+      }
+    },
+    "list_alarms": {
+      "name": "Listar alarmes",
+      "description": "Retorna todos os alarmes e o que está tocando agora."
+    },
+    "test_alarm": {
+      "name": "Testar alarme",
+      "description": "Toca o som do alarme agora num satélite (ou fala um lembrete).",
+      "fields": {
+        "target": { "name": "Satélite", "description": "O satélite do Assist a ser testado." },
+        "duration": { "name": "Duração", "description": "Segundos de toque." },
+        "sound": { "name": "Som", "description": "Som próprio para testar." },
+        "message": { "name": "Mensagem", "description": "Fala isto como lembrete em vez de tocar." }
+      }
+    }
+  }
+}
