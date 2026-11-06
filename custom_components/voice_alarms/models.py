@@ -19,6 +19,17 @@ _TIME_RE = re.compile(
     r"^\s*(?P<h>\d{1,2})(?:[:.h](?P<m>\d{2}))?\s*(?:uhr)?\s*(?P<ampm>[ap]\.?m\.?)?\s*$",
     re.IGNORECASE,
 )
+# A time as said on a 12-hour clock: '8', '8 horas', '7h30', '1h38min', '7:30'. A leading
+# zero ('08:00') or a two-digit hour with a colon ('10:30') is 24-hour HH:MM, as the LLM
+# passes it.
+_TWELVE_HOUR_RE = re.compile(
+    r"^\s*(?:às?\s+|as\s+)?(?:"
+    r"(?P<h>[1-9]|1[0-2])\s*(?:uhr|h|horas?)?"
+    r"|(?P<hm>[1-9]|1[0-2])h(?P<m>\d{2})\s*(?:min(?:utos?)?|m)?"
+    r"|(?P<hc>[1-9])[:.](?P<mc>\d{2})"
+    r")\s*$",
+    re.IGNORECASE,
+)
 _DATE_RE = re.compile(r"^\s*(?P<y>\d{4})-(?P<m>\d{1,2})-(?P<d>\d{1,2})\s*$")
 _REL_RE = re.compile(r"^\s*\+\s*(?P<n>\d+)\s*(?:d|days?|tage?)?\s*$", re.IGNORECASE)
 
@@ -113,6 +124,28 @@ def parse_time(value: Any) -> time:
     if hour > 23 or minute > 59:
         raise ParseError("err_time_format", text=text)
     return time(hour=hour, minute=minute)
+
+
+def parse_twelve_hour(value: Any) -> time | None:
+    """Return a time said on a 12-hour clock without morning or evening ('8', 'às 7h30').
+
+    Such a time could be morning or evening; '08:00', '10:30', '8 am' and '20' are not.
+    """
+    if not isinstance(value, str) or not (match := _TWELVE_HOUR_RE.match(value)):
+        return None
+    hour = match.group("h") or match.group("hm") or match.group("hc")
+    minute = match.group("m") or match.group("mc") or 0
+    if int(minute) > 59:
+        return None
+    return time(int(hour), int(minute))
+
+
+def sooner_half_day(at: time, now: datetime) -> time:
+    """Of ``at`` in the morning and in the evening, the one the local clock reaches first."""
+    local = now.astimezone(dt_util.get_default_time_zone()).time()
+    morning = time(at.hour % 12, at.minute)
+    candidates = (morning, morning.replace(hour=morning.hour + 12))
+    return next((candidate for candidate in candidates if candidate > local), candidates[0])
 
 
 def parse_weekdays(value: Any) -> list[int]:

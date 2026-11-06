@@ -12,7 +12,9 @@ from custom_components.voice_alarms.models import (
     ParseError,
     parse_date,
     parse_time,
+    parse_twelve_hour,
     parse_weekdays,
+    sooner_half_day,
 )
 from homeassistant.util import dt as dt_util
 
@@ -50,6 +52,52 @@ def test_parse_time(text, expected) -> None:
 def test_parse_time_invalid(text) -> None:
     with pytest.raises(ParseError):
         parse_time(text)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("8", time(8, 0)),
+        (" 12 ", time(12, 0)),
+        ("às 8", time(8, 0)),
+        ("8h", time(8, 0)),
+        ("8 horas", time(8, 0)),
+        ("8 Uhr", time(8, 0)),
+        ("7h30", time(7, 30)),
+        ("10h30", time(10, 30)),
+        ("1h38min", time(1, 38)),
+        ("7:30", time(7, 30)),
+        ("08:00", None),
+        ("10:30", None),
+        ("07h30", None),
+        ("13h38min", None),
+        ("7h75", None),
+        ("8am", None),
+        ("8 da manhã", None),
+        ("20", None),
+        ("0", None),
+        (time(8, 0), None),
+    ],
+)
+def test_parse_twelve_hour(text, expected) -> None:
+    assert parse_twelve_hour(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("said", "now", "expected"),
+    [
+        (time(8, 0), time(10, 0), time(20, 0)),
+        (time(8, 0), time(7, 59), time(8, 0)),
+        (time(8, 0), time(8, 0), time(20, 0)),
+        (time(8, 0), time(21, 0), time(8, 0)),
+        (time(12, 0), time(10, 0), time(12, 0)),
+        (time(12, 0), time(13, 0), time(0, 0)),
+        (time(1, 38), time(1, 43), time(13, 38)),
+        (time(7, 30), time(19, 31), time(7, 30)),
+    ],
+)
+def test_sooner_half_day(said, now, expected) -> None:
+    assert sooner_half_day(said, datetime.combine(date(2026, 9, 7), now, tzinfo=TZ)) == expected
 
 
 @pytest.mark.parametrize(

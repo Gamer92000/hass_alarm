@@ -128,6 +128,28 @@ async def test_set_past_time_today_rolls_to_tomorrow(
     assert "already in the past" in speech(response)
 
 
+async def test_set_bare_hour_rings_at_the_sooner_of_the_two(
+    hass: HomeAssistant, ready, satellites
+) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    response = await handle(hass, INTENT_SET, kitchen, time="8")
+    assert "today at 20:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="11")
+    assert "today at 11:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="08:00")
+    assert "tomorrow (Tuesday 8 September) at 08:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="8", date="tomorrow")
+    assert "tomorrow (Tuesday 8 September) at 08:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="8", weekdays="weekdays")
+    assert "at 08:00 weekdays" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="7:30")
+    assert "today at 19:30" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="10:30")
+    assert "today at 10:30" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="07:30")
+    assert "tomorrow (Tuesday 8 September) at 07:30" in speech(response)
+
+
 async def test_list_delete_and_ambiguity(hass: HomeAssistant, ready, satellites) -> None:
     kitchen = satellites["kitchen"]["device_id"]
     bedroom = satellites["bedroom"]["device_id"]

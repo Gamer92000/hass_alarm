@@ -70,6 +70,7 @@ automatically. No extra configuration is needed. Examples:
 | You say | What happens |
 | --- | --- |
 | "Wake me at 6:30" | One-time alarm on this satellite, tomorrow (or today if still ahead). |
+| "Wake me at 8" / "Wake me at 7:30" | At 08:00 or 20:00 (07:30 or 19:30), whichever comes first. A day ("tomorrow at 8") or repeat days keep the morning. |
 | "Set an alarm for 7 on weekdays called work" | Repeating alarm Mon–Fri. |
 | "Set an alarm for 8 tomorrow in the bedroom" | Target another satellite by name or area. |
 | "Remind me at 5 pm to call mom" | Spoken reminder. |

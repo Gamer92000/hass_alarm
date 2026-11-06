@@ -33,7 +33,14 @@ from .const import (
 )
 from .i18n import LocalizedError, normalize_language, tr
 from .manager import AlarmManager
-from .models import Alarm, parse_date, parse_time, parse_weekdays
+from .models import (
+    Alarm,
+    parse_date,
+    parse_time,
+    parse_twelve_hour,
+    parse_weekdays,
+    sooner_half_day,
+)
 from .ringer import STATE_PAUSED, RingSession
 from .speech import (
     capitalize,
@@ -58,7 +65,11 @@ TARGET_HELP = (
     "Name, area or entity id of the voice satellite. Defaults to the satellite the "
     "user is speaking through; only set it when the user names another one."
 )
-TIME_HELP = "Time in 24-hour HH:MM format, e.g. '06:30' or '18:00'."
+TIME_HELP = (
+    "Time in 24-hour HH:MM format, e.g. '06:30' or '18:00'. When the user says a time from 1 "
+    "to 12 o'clock without morning or evening ('wake me at 8', 'at 7:30'), pass it as said "
+    "('8', '7h30')."
+)
 DATE_HELP = (
     "Date for a one-time alarm as YYYY-MM-DD, or 'today', 'tomorrow' or a weekday name. "
     "Omit to use the next time the given time comes around."
@@ -292,12 +303,16 @@ class SetAlarmIntent(_VoiceAlarmIntent):
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
         lang = self._lang(intent_obj)
-        at = parse_time(self._slot(intent_obj, "time"))
+        time_text = self._slot(intent_obj, "time")
+        at = parse_time(time_text)
         weekdays = parse_weekdays(self._slot(intent_obj, "weekdays"))
         date_text = self._slot(intent_obj, "date")
         if weekdays and date_text:
             raise IntentFailed("err_date_and_weekdays")
         on_date = parse_date(date_text, now) if date_text else None
+        # 'Wake me at 8' means whichever 8 comes next, as long as no day pins it down.
+        if not weekdays and on_date is None and (said := parse_twelve_hour(time_text)):
+            at = sooner_half_day(said, now)
         target = self._resolve_target(intent_obj, self._slot(intent_obj, "target"))
         message = self._slot(intent_obj, "message")
         duration_minutes = self._slot(intent_obj, "duration_minutes")
