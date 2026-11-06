@@ -17,7 +17,7 @@ from custom_components.voice_alarms.http import DATA_STREAMS
 from custom_components.voice_alarms.manager import AlarmError
 from custom_components.voice_alarms.models import Alarm
 from homeassistant.components.assist_satellite import DOMAIN as SAT_DOMAIN
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall
 from homeassistant.util import dt as dt_util
 
 TZ = ZoneInfo("Europe/Zurich")
@@ -102,6 +102,37 @@ async def test_one_time_alarm_fires_and_is_removed(
     assert manager.recently_finished(timedelta(minutes=1)) == [session]
     await hass.async_block_till_done()
     assert hass.states.get("switch.voice_alarms_voice_pe_kitchen_tea") is None
+
+
+async def test_alarm_due_while_stopping_is_kept_for_the_catch_up(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """A restart asked for just before an alarm: it rings after the restart, not during it."""
+    blocking_announce.release.set()  # a ring started by mistake must not hang the test
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    alarm = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    hass.set_state(CoreState.stopping)
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert blocking_announce.calls == []
+    assert alarm.id in manager.alarms
+    assert alarm.last_fired is None
+
+    hass.set_state(CoreState.running)
+    freezer.move_to(START.replace(minute=6, second=30))
+    await manager._process()
+    await hass.async_block_till_done()
+    assert blocking_announce.calls
+    assert alarm.id not in manager.alarms
+    await manager.async_dismiss(kitchen)
+    await hass.async_block_till_done()
 
 
 async def test_recurring_alarm_skip_and_fire(
