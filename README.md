@@ -51,9 +51,6 @@ Then:
    be changed later via *Configure*.
 2. Open the **Voice Alarms** entry in the sidebar.
 
-The GitHub repository is a read-only mirror kept for HACS. Development, issues and pull
-requests live at <https://git.imhof.cloud/julian/hass_alarm>.
-
 `ffmpeg` (present on Home Assistant OS / container) is only needed for the volume ramp on
 *custom* sounds. The built-in sound never needs it.
 
@@ -176,3 +173,8 @@ pytest
 
 The tests exercise scheduling (including DST-safe local times, skipping and missed-alarm
 catch-up), the intents, the LLM tool exposure, the audio stream and the services.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The panel's icon paths come from
+[Material Design Icons](https://pictogrammers.com/library/mdi/) (Apache-2.0).
