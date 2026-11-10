@@ -128,12 +128,15 @@ async def test_llm_tools_exposed(hass: HomeAssistant, satellites, manager) -> No
     assert "speaking through the voice satellite 'Voice PE Kitchen'" in api.api_prompt
 
     tool = next(t for t in api.tools if t.name == "voice_alarms__VoiceAlarmSet")
-    result = await api.async_call_tool(
+    assert all(t.integration == "voice_alarms" for t in api.tools if t.name.startswith("voice_"))
+    tool_result = await api.async_call_tool(
         llm.ToolInput(
             tool_name=tool.name,
             tool_args={"time": "07:15", "weekdays": ["mon", "fri"], "name": "gym"},
         )
     )
+    assert not tool_result.error
+    result = tool_result.data
     assert result["response_type"] == "action_done"
     assert result["speech"]["plain"]["speech"].startswith(
         "Created repeating alarm 'gym' at 07:15 every Monday and Friday on Voice PE Kitchen"

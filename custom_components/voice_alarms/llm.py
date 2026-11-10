@@ -37,6 +37,10 @@ def async_get_tools(hass: HomeAssistant, llm_context: LLMContext, api_id: str) -
     ]
     if not tools:
         return None
+    # HA 2026.10 wants every tool to name its integration (required from 2027.10).
+    # Set the attribute rather than the IntentTool kwarg, which 2026.9 lacks.
+    for tool in tools:
+        tool.integration = DOMAIN
     prompt = PROMPT
     target = get_target_for_device(hass, llm_context.device_id)
     if target is not None:
