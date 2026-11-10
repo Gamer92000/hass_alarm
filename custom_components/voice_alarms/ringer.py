@@ -7,7 +7,7 @@ import logging
 import secrets
 import time
 from array import array
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -48,10 +48,12 @@ from .const import (
     ANNOUNCE_RETRY_SECONDS,
     KIND_REMINDER,
     MAX_SEGMENT_SECONDS,
+    MAX_SOUND_DOWNLOAD_BYTES,
     MIN_HEARD_FOR_DEVICE_STOP,
     MIN_PLAYBACK_FOR_DEVICE_STOP,
     PLAYER_POLL_SECONDS,
     PLAYER_START_TIMEOUT,
+    SUPERSEDE_TIMEOUT,
 )
 from .http import StreamRegistry, StreamSpec
 from .i18n import default_language, tr
@@ -99,6 +101,7 @@ class RingSession:
         label: str,
         origin: str = "alarm",
         loop: array,
+        predecessor: RingSession | None = None,
     ) -> None:
         self.hass = hass
         self.manager = manager
@@ -128,6 +131,11 @@ class RingSession:
         self._via_player = False
         self._resolved_sound: str | None = None
         self._temp_file: str | None = None
+        self._reminder_added = False
+        # The session this one replaces on the satellite; it is waited for.
+        self._predecessor = predecessor
+        # Restores the media player volume; handed over if a successor takes over.
+        self._restore: Callable[[], Awaitable[None]] | None = None
 
     # ------------------------------------------------------------------ public
 
@@ -156,6 +164,9 @@ class RingSession:
                 self.message = f"{self.message}. {alarm.message}"
             else:
                 self.message = alarm.message
+            # The added text gets the full number of repeats too.
+            self._reminder_added = True
+            self._wake.set()
         self.label = " & ".join(a.label for a in self.alarms) or self.label
 
     def dismiss(self, by: str = "user") -> None:
@@ -167,13 +178,10 @@ class RingSession:
         self._stop.set()
         self._wake.set()
 
-    async def wait_finished(self) -> None:
-        """Wait for the background task to finish."""
+    async def wait_finished(self, timeout: float | None = None) -> None:
+        """Wait (at most ``timeout`` seconds) for the background task to finish."""
         if self._task is not None:
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
+            await asyncio.wait({self._task}, timeout=timeout)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialise for the frontend."""
@@ -195,10 +203,26 @@ class RingSession:
 
     # ----------------------------------------------------------------- running
 
+    def take_volume_restore(self) -> Callable[[], Awaitable[None]] | None:
+        """Hand the volume restore to the successor; this session no longer restores."""
+        restore, self._restore = self._restore, None
+        return restore
+
     async def _run(self) -> None:
-        restore = None
         try:
-            restore = await self._apply_volume()
+            inherited = None
+            if (predecessor := self._predecessor) is not None:
+                self._predecessor = None
+                # Two announcements at once fail; wait until the old one ended.
+                await predecessor.wait_finished(SUPERSEDE_TIMEOUT)
+                # Its volume restore (if it has not run) is ours now: it knows
+                # the volume from before the alarm volume was set.
+                inherited = predecessor.take_volume_restore()
+            self._restore = inherited
+            if self.dismissed:
+                return
+            own = await self._apply_volume()
+            self._restore = inherited or own
             if self.kind == KIND_REMINDER:
                 await self._run_reminder()
             else:
@@ -210,6 +234,7 @@ class RingSession:
         finally:
             self.state = STATE_DONE
             self.finished_at = dt_util.utcnow()
+            restore, self._restore = self._restore, None
             if restore is not None:
                 try:
                     await restore()
@@ -317,11 +342,14 @@ class RingSession:
             if remaining < 1.0:
                 break
             if self._use_raw:
-                played = await self._play_raw_once()
-                if self._refused(played):
+                # Without ffmpeg the sound plays as is, once per announcement,
+                # and may well be a short beep: only an announcement that
+                # failed or ended at once (do not disturb) is a failure.
+                played, ok = await self._play_raw_once()
+                if ok and self._refused(played, ANNOUNCE_REFUSED_SECONDS):
                     continue
                 elapsed += played
-                if played < MIN_PLAYBACK_FOR_DEVICE_STOP and not self.dismissed:
+                if (not ok or played < ANNOUNCE_REFUSED_SECONDS) and not self.dismissed:
                     failures += 1
                     if failures > 5:
                         _LOGGER.error(
@@ -417,11 +445,18 @@ class RingSession:
             self.manager.session_changed(self)
 
     async def _run_reminder(self) -> None:
-        text = self.message or self.label
-        for attempt in range(max(1, self.config.reminder_repeats)):
+        repeats = max(1, self.config.reminder_repeats)
+        attempt = 0
+        while attempt < repeats or self._reminder_added:
             if self.dismissed:
                 break
-            spoken = tr(default_language(), "spoken_reminder", text=text)
+            if self._reminder_added:
+                # Another reminder joined: say everything, as often as configured.
+                self._reminder_added = False
+                attempt = 0
+            attempt += 1
+            # Read on every repeat: reminders that joined add to the message.
+            spoken = tr(default_language(), "spoken_reminder", text=self.message or self.label)
             try:
                 if not self._via_player:
                     started = time.monotonic()
@@ -441,7 +476,7 @@ class RingSession:
                     await self._play_on_player(await self._speech_url(spoken))
             except HomeAssistantError as err:
                 _LOGGER.warning("Speaking reminder on %s failed: %s", self.target.entity_id, err)
-            if attempt < self.config.reminder_repeats - 1:
+            if attempt < repeats or self._reminder_added:
                 await self._sleep(self.config.reminder_interval)
 
     # ------------------------------------------------------------------ audio
@@ -530,16 +565,24 @@ class RingSession:
         try:
             async with session.get(resolved, timeout=30) as resp:
                 resp.raise_for_status()
-                data = await resp.read()
+                data = bytearray()
+                async for chunk in resp.content.iter_chunked(65536):
+                    data += chunk
+                    if len(data) > MAX_SOUND_DOWNLOAD_BYTES:
+                        raise ValueError(f"larger than {MAX_SOUND_DOWNLOAD_BYTES // 1_000_000} MB")
         except Exception as err:
             raise RuntimeError(f"ffmpeg source download failed: {err}") from err
         path = await self.hass.async_add_executor_job(_write_temp, data)
         self._temp_file = path
         return path
 
-    async def _play_raw_once(self) -> float:
-        """Announce the custom sound directly (no ramp); return seconds played."""
+    async def _play_raw_once(self) -> tuple[float, bool]:
+        """Announce the custom sound directly (no ramp).
+
+        Return the seconds it took and whether the announcement succeeded.
+        """
         started = time.monotonic()
+        ok = True
         try:
             url = await self._resolve_sound()
             if self._via_player:
@@ -548,7 +591,8 @@ class RingSession:
                 await self._announce(media_id=url)
         except Exception as err:  # noqa: BLE001
             _LOGGER.warning("Playing alarm sound on %s failed: %s", self.target.entity_id, err)
-        return time.monotonic() - started
+            ok = False
+        return time.monotonic() - started, ok
 
     # ----------------------------------------------------------------- volume
 

@@ -74,10 +74,10 @@ def get_targets(hass: HomeAssistant) -> list[Target]:
 
 @callback
 def get_target(hass: HomeAssistant, entity_id: str) -> Target | None:
-    """Return a single target by entity id."""
+    """Return a single (enabled) target by entity id."""
     ent_reg = er.async_get(hass)
     entry = ent_reg.async_get(entity_id)
-    if entry is None or entry.domain != ASSIST_SATELLITE_DOMAIN:
+    if entry is None or entry.domain != ASSIST_SATELLITE_DOMAIN or entry.disabled_by:
         return None
     return _build_target(hass, entry, ent_reg, dr.async_get(hass), ar.async_get(hass))
 

@@ -6,7 +6,6 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.components import media_source
 from homeassistant.config_entries import (
     ConfigEntry,
     ConfigFlow,
@@ -41,6 +40,7 @@ from .const import (
     DEFAULT_REMINDER_REPEATS,
     DOMAIN,
 )
+from .models import is_valid_sound
 
 
 def _number(
@@ -79,9 +79,7 @@ def _validate(user_input: dict[str, Any]) -> dict[str, str]:
     errors: dict[str, str] = {}
     sound = (user_input.get(CONF_DEFAULT_SOUND) or "").strip()
     if sound:
-        if not (
-            media_source.is_media_source_id(sound) or sound.startswith(("http://", "https://", "/"))
-        ):
+        if not is_valid_sound(sound):
             errors[CONF_DEFAULT_SOUND] = "invalid_sound"
         user_input[CONF_DEFAULT_SOUND] = sound
     else:

@@ -979,6 +979,8 @@ class VoiceAlarmsPanel extends HTMLElement {
       };
       if (repeat === "once") data.date = form.date.value;
       if (form.duration.value) data.duration = Number(form.duration.value) * 60;
+      // An emptied field on an existing alarm goes back to the default duration.
+      else if (alarm) data.duration = null;
       const errorEl = form.querySelector("#form-error");
       if (!data.target) {
         errorEl.textContent = t("choose_satellite");

@@ -36,6 +36,8 @@ from .const import (
     KIND_ALARM,
     KIND_REMINDER,
     KINDS,
+    MAX_ALARM_DURATION,
+    MAX_SNOOZE_MINUTES,
     SERVICE_ADD_ALARM,
     SERVICE_DELETE_ALARM,
     SERVICE_DISMISS,
@@ -45,9 +47,9 @@ from .const import (
     SERVICE_TEST_ALARM,
     SERVICE_UPDATE_ALARM,
 )
-from .i18n import LocalizedError, default_language
+from .i18n import LocalizedError, default_language, tr
 from .manager import AlarmError, AlarmManager
-from .models import ParseError, parse_date, parse_time, parse_weekdays
+from .models import ParseError, is_valid_sound, parse_date, parse_time, parse_weekdays
 
 SERVICES = [
     SERVICE_ADD_ALARM,
@@ -68,7 +70,10 @@ _ALARM_FIELDS = {
     vol.Optional(ATTR_NAME): cv.string,
     vol.Optional(ATTR_MESSAGE): cv.string,
     vol.Optional("kind"): vol.In(KINDS),
-    vol.Optional(ATTR_DURATION): vol.All(vol.Coerce(int), vol.Range(min=1, max=86400)),
+    # None (or 0) on update_alarm resets the alarm to the default duration.
+    vol.Optional(ATTR_DURATION): vol.Any(
+        None, vol.All(vol.Coerce(int), vol.Range(min=0, max=MAX_ALARM_DURATION))
+    ),
     vol.Optional(ATTR_SOUND): cv.string,
     vol.Optional(ATTR_ENABLED): cv.boolean,
 }
@@ -96,7 +101,9 @@ DISMISS_SCHEMA = vol.Schema({vol.Optional(ATTR_TARGET): _TARGET})
 SNOOZE_SCHEMA = vol.Schema(
     {
         vol.Optional(ATTR_TARGET): _TARGET,
-        vol.Optional(ATTR_MINUTES, default=9): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+        vol.Optional(ATTR_MINUTES, default=9): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=MAX_SNOOZE_MINUTES)
+        ),
     }
 )
 TEST_SCHEMA = vol.Schema(
@@ -115,6 +122,11 @@ def _wrap(err: Exception) -> ServiceValidationError:
     if isinstance(err, LocalizedError):
         return ServiceValidationError(err.localized(default_language()))
     return ServiceValidationError(str(err))
+
+
+def _error(key: str, **params: object) -> ServiceValidationError:
+    """A service error in the instance language."""
+    return ServiceValidationError(tr(default_language(), key, **params))
 
 
 def _parsed_fields(call: ServiceCall) -> dict[str, Any]:
@@ -161,7 +173,7 @@ def async_register_services(hass: HomeAssistant, manager: AlarmManager) -> None:
             name=fields.get(ATTR_NAME),
             message=message,
             kind=fields.get("kind") or (KIND_REMINDER if message else KIND_ALARM),
-            duration=fields.get(ATTR_DURATION),
+            duration=fields.get(ATTR_DURATION) or None,
             sound=fields.get(ATTR_SOUND),
             enabled=fields.get(ATTR_ENABLED, True),
         )
@@ -175,7 +187,7 @@ def async_register_services(hass: HomeAssistant, manager: AlarmManager) -> None:
         fields = _parsed_fields(call)
         changes = {k: v for k, v in fields.items() if k != ATTR_ALARM_ID}
         if not changes:
-            raise ServiceValidationError("Nothing to update")
+            raise _error("err_nothing_to_update")
         try:
             alarm = await manager.async_update_alarm(call.data[ATTR_ALARM_ID], **changes)
         except AlarmError as err:
@@ -212,7 +224,7 @@ def async_register_services(hass: HomeAssistant, manager: AlarmManager) -> None:
         else:
             sessions = manager.active_sessions()
         if not sessions:
-            raise ServiceValidationError("Nothing is ringing")
+            raise _error("err_nothing_ringing")
         try:
             created = [await manager.async_snooze(s, call.data[ATTR_MINUTES]) for s in sessions]
         except AlarmError as err:
@@ -226,7 +238,10 @@ def async_register_services(hass: HomeAssistant, manager: AlarmManager) -> None:
     async def test_alarm(call: ServiceCall) -> ServiceResponse:
         target = manager.target(call.data[ATTR_TARGET])
         if target is None:
-            raise ServiceValidationError(f"Unknown satellite {call.data[ATTR_TARGET]}")
+            raise _error("err_unknown_target", target=call.data[ATTR_TARGET])
+        sound = call.data.get(ATTR_SOUND) or None
+        if sound is not None and not is_valid_sound(sound):
+            raise _error("err_invalid_sound", sound=sound)
         message = call.data.get(ATTR_MESSAGE)
         session = await manager.async_ring(
             target,
@@ -234,7 +249,7 @@ def async_register_services(hass: HomeAssistant, manager: AlarmManager) -> None:
             message=message,
             label="Test",
             duration=call.data[ATTR_DURATION],
-            sound=call.data.get(ATTR_SOUND),
+            sound=sound,
             origin="test",
         )
         return {"session": session.to_dict()}

@@ -88,7 +88,7 @@
         "name": { "name": "Name", "description": "Neue Bezeichnung." },
         "message": { "name": "Nachricht", "description": "Neuer Erinnerungstext." },
         "kind": { "name": "Art", "description": "alarm oder reminder." },
-        "duration": { "name": "Klingeldauer", "description": "Sekunden, die der Weckton spielt." },
+        "duration": { "name": "Klingeldauer", "description": "Sekunden, die der Weckton spielt; 0 setzt auf die Integrationseinstellung zurück." },
         "sound": { "name": "Ton", "description": "Eigener Ton für diesen Wecker." },
         "enabled": { "name": "Aktiviert", "description": "Wecker aktivieren oder deaktivieren." }
       }

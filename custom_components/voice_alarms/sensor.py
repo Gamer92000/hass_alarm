@@ -7,32 +7,18 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import get_manager
-from .const import SIGNAL_TARGETS_UPDATED
-from .entity import VoiceAlarmsTargetEntity
+from .entity import VoiceAlarmsTargetEntity, async_track_targets
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up one 'next alarm' sensor per satellite."""
-    manager = get_manager(hass)
-    known: set[str] = set()
-
-    @callback
-    def sync_targets() -> None:
-        new = [t for t in manager.targets() if t.entity_id not in known]
-        for target in new:
-            known.add(target.entity_id)
-        if new:
-            async_add_entities(NextAlarmSensor(manager, t) for t in new)
-
-    sync_targets()
-    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_TARGETS_UPDATED, sync_targets))
+    async_track_targets(hass, entry, get_manager(hass), async_add_entities, (NextAlarmSensor,))
 
 
 class NextAlarmSensor(VoiceAlarmsTargetEntity, SensorEntity):
@@ -40,10 +26,10 @@ class NextAlarmSensor(VoiceAlarmsTargetEntity, SensorEntity):
 
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_translation_key = "next_alarm"
+    # The full alarm list is for automations and the frontend, not for history.
+    _unrecorded_attributes = frozenset({"alarms"})
 
-    def __init__(self, manager, target) -> None:
-        super().__init__(manager, target)
-        self._attr_unique_id = f"{target.entity_id}_next_alarm"
+    _unique_suffix = "_next_alarm"
 
     @property
     def native_value(self) -> datetime | None:

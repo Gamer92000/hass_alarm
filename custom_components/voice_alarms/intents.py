@@ -821,13 +821,15 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
             described.append(tr(lang, "change_duration", minutes=duration_minutes))
         if not changes:
             raise IntentFailed("err_nothing_to_change")
-        updated: list[Alarm] = []
+        updates: list[tuple[str, dict[str, Any]]] = []
         for alarm in alarms:
             alarm_changes = dict(changes)
             # A new date turns a repeating alarm into a one-time one unless days were given too.
             if "date" in alarm_changes and "weekdays" not in alarm_changes and alarm.is_recurring:
                 alarm_changes["weekdays"] = []
-            updated.append(await self.manager.async_update_alarm(alarm.id, **alarm_changes))
+            updates.append((alarm.id, alarm_changes))
+        # All or nothing: one invalid change must not leave the others half done.
+        updated = await self.manager.async_update_alarms(updates)
         descriptions = [
             describe_alarm(a, self.manager.target(a.target), now, language=lang) for a in updated
         ]

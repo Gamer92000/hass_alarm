@@ -187,13 +187,18 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         # -- manager (AlarmError)
         "err_unknown_target": "Unknown voice satellite '{target}'",
         "err_time_past": "That time is already in the past",
-        "err_duration": "Duration must be at least 1 second",
+        "err_duration": "Duration must be between 1 second and 24 hours",
         "err_no_such_alarm": "No alarm with id {alarm_id}",
         "err_unknown_field": "Unknown field {field}",
         "err_skip_not_recurring": (
             "Only repeating alarms can skip an occurrence; delete it instead"
         ),
-        "err_snooze_minutes": "Snooze must be at least 1 minute",
+        "err_snooze_minutes": "Snooze must be between 1 minute and 24 hours",
+        "err_invalid_sound": (
+            "'{sound}' is not a valid sound: use an http(s) URL, a path starting with / "
+            "or a media-source:// id"
+        ),
+        "err_nothing_to_update": "Nothing to update",
         # -- parsing (ParseError)
         "err_time_format": "'{text}' is not a valid time, use 24-hour HH:MM",
         "err_time_invalid": "'{text}' is not a valid time",
@@ -337,13 +342,18 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "stopped": "Gestoppt: {list}.",
         "err_unknown_target": "Unbekannter Sprachsatellit '{target}'",
         "err_time_past": "Dieser Zeitpunkt liegt bereits in der Vergangenheit",
-        "err_duration": "Die Dauer muss mindestens 1 Sekunde betragen",
+        "err_duration": "Die Dauer muss zwischen 1 Sekunde und 24 Stunden liegen",
         "err_no_such_alarm": "Kein Wecker mit der ID {alarm_id}",
         "err_unknown_field": "Unbekanntes Feld {field}",
         "err_skip_not_recurring": (
             "Nur wiederkehrende Wecker können einen Termin überspringen; lösche ihn stattdessen"
         ),
-        "err_snooze_minutes": "Schlummern muss mindestens 1 Minute dauern",
+        "err_snooze_minutes": "Schlummern muss zwischen 1 Minute und 24 Stunden dauern",
+        "err_invalid_sound": (
+            "'{sound}' ist kein gültiger Klang: verwende eine http(s)-URL, einen Pfad, der "
+            "mit / beginnt, oder eine media-source://-ID"
+        ),
+        "err_nothing_to_update": "Nichts zu ändern",
         "err_time_format": "'{text}' ist keine gültige Uhrzeit, verwende HH:MM (24-Stunden-Format)",
         "err_time_invalid": "'{text}' ist keine gültige Uhrzeit",
         "err_weekday": "'{text}' ist kein Wochentag",

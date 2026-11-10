@@ -8,6 +8,8 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -15,7 +17,8 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import get_manager
 from .const import SIGNAL_ALARMS_UPDATED
 from .entity import target_device_info
-from .manager import AlarmManager
+from .i18n import default_language
+from .manager import AlarmError, AlarmManager
 from .models import Alarm
 
 _LOGGER = logging.getLogger(__name__)
@@ -51,6 +54,8 @@ class AlarmSwitch(SwitchEntity):
         self.alarm_id = alarm.id
         self._known = known
         self._attr_unique_id = f"alarm_{alarm.id}"
+        self._target_id = alarm.target
+        self._removing = False
         target = manager.target(alarm.target)
         if target is not None:
             self._attr_device_info = target_device_info(target)
@@ -92,11 +97,17 @@ class AlarmSwitch(SwitchEntity):
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """Enable."""
-        await self.manager.async_update_alarm(self.alarm_id, enabled=True)
+        await self._set_enabled(True)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Disable."""
-        await self.manager.async_update_alarm(self.alarm_id, enabled=False)
+        await self._set_enabled(False)
+
+    async def _set_enabled(self, enabled: bool) -> None:
+        try:
+            await self.manager.async_update_alarm(self.alarm_id, enabled=enabled)
+        except AlarmError as err:
+            raise ServiceValidationError(err.localized(default_language())) from err
 
     async def async_added_to_hass(self) -> None:
         """Subscribe to updates."""
@@ -106,10 +117,30 @@ class AlarmSwitch(SwitchEntity):
 
     @callback
     def _updated(self) -> None:
-        if self._alarm is None:
-            self.hass.async_create_task(self._async_remove_self())
+        alarm = self._alarm
+        if alarm is None:
+            if not self._removing:
+                self._removing = True
+                self.hass.async_create_task(self._async_remove_self())
             return
+        if alarm.target != self._target_id:
+            self._move_to_target(alarm.target)
         self.async_write_ha_state()
+
+    @callback
+    def _move_to_target(self, entity_id: str) -> None:
+        """Put the switch under the device of the satellite its alarm moved to."""
+        self._target_id = entity_id
+        target = self.manager.target(entity_id)
+        if target is None or self.registry_entry is None:
+            return
+        dev_reg = dr.async_get(self.hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=self.registry_entry.config_entry_id,
+            **target_device_info(target),
+        )
+        if device.id != self.registry_entry.device_id:
+            er.async_get(self.hass).async_update_entity(self.entity_id, device_id=device.id)
 
     async def _async_remove_self(self) -> None:
         self._known.discard(self.alarm_id)

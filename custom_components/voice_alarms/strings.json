@@ -88,7 +88,7 @@
         "name": { "name": "Name", "description": "New label." },
         "message": { "name": "Message", "description": "New reminder text." },
         "kind": { "name": "Kind", "description": "alarm or reminder." },
-        "duration": { "name": "Ring duration", "description": "Seconds the alarm sound plays." },
+        "duration": { "name": "Ring duration", "description": "Seconds the alarm sound plays; 0 goes back to the integration setting." },
         "sound": { "name": "Sound", "description": "Custom sound for this alarm." },
         "enabled": { "name": "Enabled", "description": "Enable or disable the alarm." }
       }

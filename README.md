@@ -110,6 +110,12 @@ which stops playback within a couple of seconds. If the satellite has a media pl
 (Voice PE does), the satellite volume can additionally be set to a fixed level while ringing
 and is restored afterwards.
 
+When several things are due on one satellite at once, alarms that fire while an alarm rings
+join it, and reminders join a reminder that is being spoken. A reminder due while an alarm
+rings is spoken once the alarm is over; an alarm due while a reminder is spoken takes over,
+and the reminder is repeated after it. A test ring never interrupts anything and is
+interrupted by anything that is due.
+
 ## Options
 
 | Option | Default | Meaning |
@@ -119,7 +125,7 @@ and is restored afterwards.
 | Start level of the ramp | 10 % | Loudness at the beginning of the ramp. |
 | Ramp curve | ease in-out | Shape of the ramp as a cubic bezier easing (like CSS `cubic-bezier`). Edited graphically in the panel: *Settings → Edit ramp*, with drag handles, presets and an audible preview. |
 | Satellite volume while ringing | *(empty)* | If set, the satellite media player is set to this volume during the alarm and restored afterwards. |
-| Alarm sound | built-in | URL, `/local/...` path or `media-source://media_source/local/file.mp3`. Can be overridden per alarm. |
+| Alarm sound | built-in | http(s) URL, `/local/...` path or `media-source://media_source/local/file.mp3` (also for the per-alarm sound; downloads for ffmpeg are capped at 20 MB). Can be overridden per alarm. |
 | Reminder repeats / pause | 3 × 60 s | How often and how spaced a reminder is spoken. |
 | Missed alarm grace | 600 s | An alarm that was missed by less than this (restart, downtime) still rings. |
 | Resume ringing after device stop | 0 s | 0 = a stop on the device dismisses the alarm; otherwise the alarm pauses that many seconds and rings again. |
@@ -130,7 +136,7 @@ All services live in the `voice_alarms` domain and are documented in the UI
 (*Developer tools → Actions*):
 
 - `add_alarm` (target, time, date, weekdays, name, message, kind, duration, sound, enabled) → returns the alarm
-- `update_alarm` (alarm_id + any of the above)
+- `update_alarm` (alarm_id + any of the above; `duration: 0` goes back to the default)
 - `delete_alarm` (alarm_id)
 - `skip_next` (alarm_id, undo)
 - `dismiss` (target, optional)

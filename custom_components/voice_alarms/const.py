@@ -39,6 +39,10 @@ DEFAULT_REMINDER_INTERVAL: Final = 60
 DEFAULT_MISSED_GRACE: Final = 600
 DEFAULT_DEVICE_STOP_PAUSE: Final = 0
 DEFAULT_TEST_DURATION: Final = 20
+MAX_ALARM_DURATION: Final = 86400  # seconds
+MAX_SNOOZE_MINUTES: Final = 1440
+# How long a new session waits for the one it interrupts to go quiet.
+SUPERSEDE_TIMEOUT: Final = 5.0
 
 # Alarm kinds
 KIND_ALARM: Final = "alarm"
@@ -83,6 +87,16 @@ ANNOUNCE_REFUSED_SECONDS: Final = 1.0
 PLAYER_START_TIMEOUT: Final = 10.0
 PLAYER_POLL_SECONDS: Final = 0.25
 RECENTLY_DISMISSED_SECONDS: Final = 180
+# Custom sounds fetched over HTTP for ffmpeg are refused above this size.
+MAX_SOUND_DOWNLOAD_BYTES: Final = 20_000_000
+
+# Unique id suffixes (after the satellite entity id) of the per-satellite entities.
+TARGET_ENTITY_SUFFIXES: Final = {
+    "_next_alarm": Platform.SENSOR,
+    "_ringing": Platform.BINARY_SENSOR,
+    "_dismiss": Platform.BUTTON,
+    "_test": Platform.BUTTON,
+}
 
 # Dispatcher signals
 SIGNAL_ALARMS_UPDATED: Final = f"{DOMAIN}_alarms_updated"

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import shutil
 from array import array
+from dataclasses import fields, replace
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -13,6 +14,7 @@ from homeassistant.components.assist_satellite import DOMAIN as ASSIST_SATELLITE
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -39,24 +41,30 @@ from .const import (
     DEFAULT_RAMP_START,
     DEFAULT_REMINDER_INTERVAL,
     DEFAULT_REMINDER_REPEATS,
+    DOMAIN,
     KIND_ALARM,
     KIND_REMINDER,
+    MAX_ALARM_DURATION,
+    MAX_SNOOZE_MINUTES,
     SIGNAL_ALARMS_UPDATED,
     SIGNAL_CONFIG_UPDATED,
     SIGNAL_RINGING_UPDATED,
     SIGNAL_TARGETS_UPDATED,
     STORAGE_KEY,
     STORAGE_VERSION,
+    TARGET_ENTITY_SUFFIXES,
 )
 from .http import StreamRegistry
 from .i18n import LocalizedError, default_language, tr
-from .models import Alarm, combine_local
+from .models import Alarm, combine_local, is_valid_sound
 from .ringer import RingConfig, RingSession
 from .targets import Target, get_target, get_targets, match_targets
 
 _LOGGER = logging.getLogger(__name__)
 
 MAX_RECENT_SESSIONS = 10
+# A snooze may end this much early rather than almost a minute late.
+SNOOZE_ROUND_DOWN = timedelta(seconds=5)
 
 
 class AlarmError(LocalizedError, ValueError):
@@ -80,6 +88,8 @@ class AlarmManager:
         self.alarms: dict[str, Alarm] = {}
         self.sessions: dict[str, RingSession] = {}
         self.recent_sessions: list[RingSession] = []
+        # Reminders that fired while an alarm rang on their satellite; spoken after it.
+        self._queued: dict[str, list[Alarm]] = {}
         self.ffmpeg_binary: str | None = None
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._unsub_timer: CALLBACK_TYPE | None = None
@@ -171,6 +181,10 @@ class AlarmManager:
             duration = alarm.duration if alarm and alarm.duration else self.default_duration
         if sound is None:
             sound = alarm.sound if alarm and alarm.sound else self.default_sound
+        if sound and not is_valid_sound(sound):
+            # Saved before sounds were checked; ffmpeg must not get it as a bare input.
+            _LOGGER.warning("Alarm sound %s is not playable, using the default sound", sound)
+            sound = self.default_sound
         return RingConfig(
             duration=max(1, int(duration)),
             sound=sound,
@@ -219,6 +233,7 @@ class AlarmManager:
         if self._unsub_registry:
             self._unsub_registry()
             self._unsub_registry = None
+        self._queued.clear()
         sessions = list(self.sessions.values())
         for session in sessions:
             session.dismiss(by="shutdown")
@@ -235,7 +250,67 @@ class AlarmManager:
 
     @callback
     def _registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        data = event.data
+        if data["action"] == "update" and (old := data.get("old_entity_id")):
+            self._target_renamed(old, data["entity_id"])
+        elif data["action"] == "remove":
+            self._target_removed(data["entity_id"])
         async_dispatcher_send(self.hass, SIGNAL_TARGETS_UPDATED)
+
+    @callback
+    def _target_renamed(self, old: str, new: str) -> None:
+        """Follow a satellite whose entity id changed: alarms, entities and device."""
+        if not old.startswith(f"{ASSIST_SATELLITE_DOMAIN}."):
+            return
+        moved = False
+        for alarm in self.alarms.values():
+            if alarm.target == old:
+                alarm.target = new
+                moved = True
+        ent_reg = er.async_get(self.hass)
+        for suffix, platform in TARGET_ENTITY_SUFFIXES.items():
+            entity_id = ent_reg.async_get_entity_id(platform, DOMAIN, f"{old}{suffix}")
+            if entity_id is None:
+                continue
+            if ent_reg.async_get_entity_id(platform, DOMAIN, f"{new}{suffix}") is not None:
+                ent_reg.async_remove(entity_id)
+            else:
+                ent_reg.async_update_entity(entity_id, new_unique_id=f"{new}{suffix}")
+        dev_reg = dr.async_get(self.hass)
+        if device := self._device(dev_reg, old):
+            if self._device(dev_reg, new) is None:
+                dev_reg.async_update_device(device.id, new_identifiers={(DOMAIN, new)})
+        if moved:
+            _LOGGER.info("Satellite %s is now %s; moved its alarms along", old, new)
+            self._save()
+        # The entities hold the old target; rebuilding them is far simpler than
+        # rewiring each one (it also ends a session ringing on the satellite).
+        self.hass.config_entries.async_schedule_reload(self.entry.entry_id)
+
+    @callback
+    def _device(self, dev_reg: dr.DeviceRegistry, entity_id: str) -> dr.DeviceEntry | None:
+        """Our device grouping the entities of satellite ``entity_id``."""
+        identifier = (DOMAIN, entity_id)
+        if hasattr(dev_reg, "async_get_device_by_identifier"):  # 2026.10+
+            return dev_reg.async_get_device_by_identifier(identifier, self.entry.entry_id)
+        return dev_reg.async_get_device(identifiers={identifier})
+
+    @callback
+    def _target_removed(self, entity_id: str) -> None:
+        """Drop the per-satellite entities of a deleted satellite.
+
+        Its alarms stay (they can be moved to another satellite), and so does
+        the device while they still need it for their switches.
+        """
+        ent_reg = er.async_get(self.hass)
+        for suffix, platform in TARGET_ENTITY_SUFFIXES.items():
+            if registered := ent_reg.async_get_entity_id(platform, DOMAIN, f"{entity_id}{suffix}"):
+                ent_reg.async_remove(registered)
+        if any(alarm.target == entity_id for alarm in self.alarms.values()):
+            return
+        dev_reg = dr.async_get(self.hass)
+        if device := self._device(dev_reg, entity_id):
+            dev_reg.async_remove_device(device.id)
 
     # -------------------------------------------------------------- storage
 
@@ -301,20 +376,31 @@ class AlarmManager:
                 best = (alarm, nxt)
         return best
 
-    def _validate(self, alarm: Alarm, now: datetime) -> None:
-        if self.target(alarm.target) is None:
+    def _validate(
+        self,
+        alarm: Alarm,
+        now: datetime,
+        *,
+        check_target: bool = True,
+        check_sound: bool = True,
+    ) -> None:
+        """Check an alarm and fill in the date of a one-time alarm without one.
+
+        ``check_target`` and ``check_sound`` are off when an update keeps
+        them, so that an alarm whose satellite was deleted, or that was saved
+        before sounds were checked, can still be disabled or renamed.
+        """
+        if check_target and self.target(alarm.target) is None:
             raise AlarmError("err_unknown_target", target=alarm.target)
+        if check_sound and alarm.sound is not None and not is_valid_sound(alarm.sound):
+            raise AlarmError("err_invalid_sound", sound=alarm.sound)
+        if alarm.duration is not None and not 1 <= alarm.duration <= MAX_ALARM_DURATION:
+            raise AlarmError("err_duration")
         if not alarm.is_recurring:
             if alarm.date is None:
-                local_now = dt_util.as_local(now)
-                candidate = combine_local(local_now.date(), alarm.time)
-                if candidate <= now:
-                    candidate = combine_local(local_now.date() + timedelta(days=1), alarm.time)
-                alarm.date = candidate.astimezone(dt_util.get_default_time_zone()).date()
-            elif combine_local(alarm.date, alarm.time) <= now:
+                alarm.date = _next_date(alarm.time, now)
+            elif alarm.enabled and combine_local(alarm.date, alarm.time) <= now:
                 raise AlarmError("err_time_past")
-        if alarm.duration is not None and alarm.duration < 1:
-            raise AlarmError("err_duration")
 
     async def async_add_alarm(self, alarm: Alarm) -> Alarm:
         """Add a validated alarm."""
@@ -333,57 +419,94 @@ class AlarmManager:
 
         Recognised keys: target, time, date, weekdays, name, message, duration,
         sound, enabled, kind. Changing the schedule resets the fired state.
+        Nothing changes when the result is invalid.
         """
-        alarm = self.alarms.get(alarm_id)
-        if alarm is None:
-            raise AlarmError("err_no_such_alarm", alarm_id=alarm_id)
+        return (await self.async_update_alarms([(alarm_id, changes)]))[0]
+
+    async def async_update_alarms(self, updates: list[tuple[str, dict[str, Any]]]) -> list[Alarm]:
+        """Apply several updates all or nothing: if one is invalid, none is applied."""
         now = dt_util.utcnow()
-        schedule_changed = False
-        for key, value in changes.items():
-            if key == "time":
-                if value != alarm.time:
-                    alarm.time = value
-                    schedule_changed = True
-            elif key == "date":
-                if value != alarm.date:
-                    alarm.date = value
-                    schedule_changed = True
-            elif key == "weekdays":
-                new = sorted(set(value or []))
-                if new != alarm.weekdays:
-                    alarm.weekdays = new
-                    schedule_changed = True
-                    if new:
-                        alarm.date = None
-            elif key == "target":
-                alarm.target = value
-            elif key == "name":
-                alarm.name = value or None
-            elif key == "message":
-                alarm.message = value or None
-                if alarm.message and alarm.kind == KIND_ALARM:
-                    alarm.kind = KIND_REMINDER
-            elif key == "kind":
-                alarm.kind = value
-            elif key == "duration":
-                alarm.duration = int(value) if value else None
-            elif key == "sound":
-                alarm.sound = value or None
-            elif key == "enabled":
-                alarm.enabled = bool(value)
-            else:
-                raise AlarmError("err_unknown_field", field=key)
-        if schedule_changed:
-            alarm.last_fired = None
-            alarm.skipped_occurrence = None
-            alarm.created = now
-            if not alarm.is_recurring and "date" not in changes:
-                alarm.date = None
-        self._validate(alarm, now)
+        prepared: list[tuple[Alarm, Alarm]] = []
+        for alarm_id, changes in updates:
+            alarm = self.alarms.get(alarm_id)
+            if alarm is None:
+                raise AlarmError("err_no_such_alarm", alarm_id=alarm_id)
+            prepared.append((alarm, self._prepare_update(alarm, changes, now)))
+        for alarm, updated in prepared:
+            # Copy back rather than swap objects: ring sessions hold the alarm.
+            for item in fields(Alarm):
+                setattr(alarm, item.name, getattr(updated, item.name))
         self._save()
         self._notify_alarms()
         await self._process()
-        return alarm
+        return [alarm for alarm, _ in prepared]
+
+    def _prepare_update(self, alarm: Alarm, changes: dict[str, Any], now: datetime) -> Alarm:
+        """Return a validated copy of ``alarm`` with ``changes`` applied."""
+        updated = replace(alarm, weekdays=list(alarm.weekdays))
+        schedule_changed = False
+        for key, value in changes.items():
+            if key == "time":
+                if value != updated.time:
+                    updated.time = value
+                    schedule_changed = True
+            elif key == "date":
+                if value != updated.date:
+                    updated.date = value
+                    schedule_changed = True
+            elif key == "weekdays":
+                new = sorted(set(value or []))
+                if new != updated.weekdays:
+                    updated.weekdays = new
+                    schedule_changed = True
+                    if new:
+                        updated.date = None
+            elif key == "target":
+                updated.target = value
+            elif key == "name":
+                updated.name = value or None
+            elif key == "message":
+                updated.message = value or None
+                if updated.message and updated.kind == KIND_ALARM:
+                    updated.kind = KIND_REMINDER
+            elif key == "kind":
+                updated.kind = value
+            elif key == "duration":
+                updated.duration = int(value) if value else None
+            elif key == "sound":
+                updated.sound = value or None
+            elif key == "enabled":
+                updated.enabled = bool(value)
+            else:
+                raise AlarmError("err_unknown_field", field=key)
+        date_changed = updated.date != alarm.date
+        if schedule_changed:
+            updated.last_fired = None
+            updated.skipped_occurrence = None
+            updated.created = now
+            # A one-time alarm whose date was not given moves to the next time
+            # its clock time comes round. (The panel always sends the date.)
+            if not updated.is_recurring and "date" not in changes:
+                updated.date = None
+        elif (
+            updated.enabled
+            and not alarm.enabled
+            and not updated.is_recurring
+            and not date_changed
+            and updated.date is not None
+            and combine_local(updated.date, updated.time) <= now
+        ):
+            # Re-enabling a one-time alarm whose day has passed: next time round.
+            updated.date = None
+            updated.last_fired = None
+            updated.created = now
+        self._validate(
+            updated,
+            now,
+            check_target=updated.target != alarm.target,
+            check_sound=updated.sound != alarm.sound,
+        )
+        return updated
 
     async def async_delete_alarm(self, alarm_id: str) -> Alarm:
         """Delete an alarm."""
@@ -452,13 +575,40 @@ class AlarmManager:
         sound: str | None = None,
         origin: str = "alarm",
     ) -> RingSession:
-        """Start ringing on a satellite (or attach to the active session)."""
-        existing = self.session_for_target(target.entity_id)
+        """Start ringing on a satellite, or join what is already active there.
+
+        Alarms join a ringing alarm, reminders a speaking reminder. A reminder
+        due while an alarm rings is spoken once the alarm is over; an alarm due
+        while a reminder speaks takes over and the reminder follows it. Tests
+        never interrupt anything and anything interrupts a test.
+        """
+        entity_id = target.entity_id
+        existing = self.session_for_target(entity_id)
+        if existing is not None and existing.dismissed:
+            # Dismissed and only finishing: nothing to join or to repeat later.
+            predecessor: RingSession | None = existing
+            existing = None
+        else:
+            predecessor = existing
         if existing is not None:
-            if alarm is not None:
-                existing.attach(alarm)
-                self._notify_ringing()
-            return existing
+            if origin == "test":
+                return existing
+            if existing.origin != "test":
+                if existing.kind == kind:
+                    if alarm is not None:
+                        existing.attach(alarm)
+                        self._notify_ringing()
+                    return existing
+                if existing.kind == KIND_ALARM:
+                    if alarm is not None:
+                        self._queued.setdefault(entity_id, []).append(alarm)
+                    return existing
+                # An alarm interrupts a reminder, which is repeated afterwards.
+                self._queued.setdefault(entity_id, []).extend(existing.alarms)
+            existing.dismiss(by="superseded")
+        # Registered at once, so that the ending predecessor finds a successor
+        # (and leaves the queue to it); the new session itself waits for the
+        # predecessor to go quiet before it plays.
         session = RingSession(
             self.hass,
             self,
@@ -471,6 +621,7 @@ class AlarmManager:
             label=label or (alarm.label if alarm else tr(default_language(), "label_alarm")),
             origin=origin,
             loop=self.loop,
+            predecessor=predecessor,
         )
         self.sessions[target.entity_id] = session
         session.start()
@@ -492,13 +643,15 @@ class AlarmManager:
 
     async def async_snooze(self, session: RingSession, minutes: int) -> Alarm:
         """Dismiss a session and ring again in ``minutes`` minutes."""
-        if minutes < 1:
+        if not 1 <= minutes <= MAX_SNOOZE_MINUTES:
             raise AlarmError("err_snooze_minutes")
-        session.dismiss(by="snooze")
-        when = dt_util.as_local(dt_util.utcnow() + timedelta(minutes=minutes))
-        when = when.replace(second=0, microsecond=0)
-        if minutes >= 1 and when <= dt_util.now():
+        # Alarms ring on the minute. Round up, so that a snooze is never
+        # noticeably short, unless that would add almost a whole minute.
+        exact = dt_util.utcnow() + timedelta(minutes=minutes)
+        when = exact.replace(second=0, microsecond=0)
+        if exact - when > SNOOZE_ROUND_DOWN:
             when += timedelta(minutes=1)
+        when = dt_util.as_local(when)
         base = session.alarms[0] if session.alarms else None
         alarm = Alarm(
             target=session.target.entity_id,
@@ -508,8 +661,12 @@ class AlarmManager:
             kind=session.kind,
             message=session.message,
             duration=base.duration if base else None,
-            sound=base.sound if base else None,
+            # A sound saved before sounds were checked rings as the default anyway.
+            sound=base.sound if base and base.sound and is_valid_sound(base.sound) else None,
         )
+        # Check before stopping the ring, so a failing snooze leaves it ringing.
+        self._validate(alarm, dt_util.utcnow())
+        session.dismiss(by="snooze")
         return await self.async_add_alarm(alarm)
 
     @callback
@@ -525,6 +682,22 @@ class AlarmManager:
         self.recent_sessions.append(session)
         del self.recent_sessions[:-MAX_RECENT_SESSIONS]
         self._notify_ringing()
+        entity_id = session.target.entity_id
+        # A session that was followed by another one leaves the queue to it.
+        if self._started and self.session_for_target(entity_id) is None:
+            if queued := self._queued.pop(entity_id, None):
+                self.hass.async_create_task(self._ring_queued(entity_id, queued))
+
+    async def _ring_queued(self, entity_id: str, alarms: list[Alarm]) -> None:
+        """Ring what had to wait for the previous session on this satellite."""
+        target = self.target(entity_id)
+        if target is None:
+            _LOGGER.error("Cannot ring queued alarms: satellite %s no longer exists", entity_id)
+            return
+        for alarm in alarms:
+            await self.async_ring(
+                target, alarm=alarm, kind=alarm.kind, message=alarm.message, label=alarm.label
+            )
 
     # ----------------------------------------------------------- scheduling
 
@@ -605,7 +778,7 @@ class AlarmManager:
         target = self.target(alarm.target)
         if target is None:
             _LOGGER.error(
-                "Cannot ring %s '%s': satellite %s no longer exists",
+                "Cannot ring %s '%s': satellite %s is missing or disabled",
                 alarm.kind,
                 alarm.label,
                 alarm.target,
@@ -664,6 +837,15 @@ class AlarmManager:
             "config": self.config_dict(),
             "now": now.isoformat(),
         }
+
+
+def _next_date(at: time, now: datetime) -> date:
+    """Local date of the next time the clock shows ``at`` after ``now``."""
+    local_now = dt_util.as_local(now)
+    candidate = combine_local(local_now.date(), at)
+    if candidate <= now:
+        candidate = combine_local(local_now.date() + timedelta(days=1), at)
+    return candidate.astimezone(dt_util.get_default_time_zone()).date()
 
 
 def _ramp_curve(value: Any) -> Curve:

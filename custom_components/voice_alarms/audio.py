@@ -262,6 +262,24 @@ _CRC8_TABLE = _crc_table(0x07, 8)
 _CRC16_TABLE = _crc_table(0x8005, 16)
 
 
+def _crc16_word_table() -> array:
+    """CRC-16 step table for a whole 16-bit word at a time.
+
+    The register is as wide as the word, so a step only depends on
+    ``crc ^ word``: half the lookups of the byte table for the sample data,
+    which is nearly all of every frame.
+    """
+    table = _CRC16_TABLE
+    words = array("H", bytes(2 * 65536))
+    for value in range(65536):
+        crc = ((value << 8) & 0xFFFF) ^ table[value >> 8]
+        words[value] = ((crc << 8) & 0xFFFF) ^ table[crc >> 8]
+    return words
+
+
+_CRC16_WORD_TABLE = _crc16_word_table()
+
+
 def flac_crc8(data: bytes | bytearray) -> int:
     """CRC-8 (polynomial 0x07, no init/xor) as used for FLAC frame headers."""
     crc = 0
@@ -271,12 +289,22 @@ def flac_crc8(data: bytes | bytearray) -> int:
     return crc
 
 
-def flac_crc16(data: bytes | bytearray) -> int:
-    """CRC-16 (polynomial 0x8005, no init/xor) as used for FLAC frames."""
-    crc = 0
+def flac_crc16(data: bytes | bytearray, crc: int = 0) -> int:
+    """CRC-16 (polynomial 0x8005, no init/xor) as used for FLAC frames.
+
+    ``crc`` continues a CRC computed over preceding data.
+    """
     table = _CRC16_TABLE
     for byte in data:
         crc = ((crc << 8) & 0xFFFF) ^ table[(crc >> 8) ^ byte]
+    return crc
+
+
+def _flac_crc16_words(words: array, crc: int) -> int:
+    """Continue a CRC-16 over big-endian 16-bit ``words`` (given as their values)."""
+    table = _CRC16_WORD_TABLE
+    for word in words:
+        crc = table[crc ^ word]
     return crc
 
 
@@ -360,15 +388,18 @@ class FlacWriter:
         self._frame_number += 1
 
         parts = [bytes(header)]
+        crc = flac_crc16(header)
         for channel in range(self.channels):
             block = samples[channel :: self.channels] if self.channels > 1 else samples
-            block = array("h", block.tobytes())
-            if sys.byteorder == "little":
-                block.byteswap()
+            # The CRC runs over the big-endian samples, i.e. their unsigned values.
+            words = array("H", block.tobytes())
             # subframe header: VERBATIM, no wasted bits; then the raw samples
-            parts.append(b"\x02" + block.tobytes())
+            crc = _flac_crc16_words(words, flac_crc16(b"\x02", crc))
+            if sys.byteorder == "little":
+                words.byteswap()
+            parts.append(b"\x02" + words.tobytes())
         frame = b"".join(parts)
-        return frame + struct.pack(">H", flac_crc16(frame))
+        return frame + struct.pack(">H", crc)
 
 
 def build_default_loop(rate: int = SAMPLE_RATE) -> array:

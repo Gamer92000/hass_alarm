@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+from homeassistant.components.media_source import is_media_source_id
 from homeassistant.util import dt as dt_util
 
 from .const import KIND_ALARM, KIND_REMINDER, KINDS, WEEKDAY_CODES
@@ -78,6 +79,15 @@ _THIS_PREFIXES = ("this ", "diesen ", "dieser ", "am ", "on ")
 
 class ParseError(LocalizedError, ValueError):
     """Raised when user supplied input cannot be parsed."""
+
+
+def is_valid_sound(sound: str) -> bool:
+    """True for a sound the ringer can play: http(s) URL, '/' path or media-source id.
+
+    Anything else would reach ffmpeg as a bare input name (a local file or an
+    ffmpeg protocol), which only a media source may resolve to.
+    """
+    return is_media_source_id(sound) or sound.startswith(("http://", "https://", "/"))
 
 
 def parse_time(value: Any) -> time:
