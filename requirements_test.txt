@@ -1,5 +1,8 @@
 # Test environment: Home Assistant 2026.10 (needs Python >= 3.14.2) plus the
 # requirements of the core integrations voice_alarms depends on.
+# The integration requires 2026.11 (hacs.json), but
+# pytest-homeassistant-custom-component has no 2026.11 release yet; move both
+# pins (and the core requirements below) to 2026.11.x once it does.
 homeassistant==2026.10.4
 pytest-homeassistant-custom-component==0.13.375
 pytest-timeout==2.4.0

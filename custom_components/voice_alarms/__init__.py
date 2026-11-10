@@ -12,7 +12,6 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_CORE_CONFIG_UPDATE
 from homeassistant.core import Event, HomeAssistant, callback
-from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.hass_dict import HassKey
 
 from .audio import build_default_loop, default_sound_wav
@@ -44,11 +43,6 @@ type VoiceAlarmsConfigEntry = ConfigEntry
 def get_manager(hass: HomeAssistant) -> AlarmManager:
     """Return the running manager."""
     return hass.data[DATA_MANAGER]
-
-
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Nothing to do for YAML."""
-    return True
 
 
 def _panel_digest(path: Path) -> str:

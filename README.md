@@ -4,16 +4,18 @@
 
 [![ci](https://github.com/Gamer92000/hass_alarm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Gamer92000/hass_alarm/actions/workflows/ci.yml)
 
-[![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Gamer92000&repository=hass_alarm&category=integration)
+<!-- ha-marketplace:exclude-start -->
+[![Open your Home Assistant instance and open this repository in the Marketplace.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Gamer92000&repository=hass_alarm&category=integration)
+<!-- ha-marketplace:exclude-end -->
 [![Open your Home Assistant instance and start setting up the integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=voice_alarms)
 
 Alarms and reminders that ring on your **Assist voice satellites** (Home Assistant Voice PE,
 ESPHome satellites, Wyoming satellites, …), managed by voice through your LLM conversation
 agent or through a panel in the Home Assistant UI.
 
-**Requires Home Assistant 2026.9 or newer.** No older versions are supported: the
-integration relies on the LLM tools platform introduced in 2026.8 and the current
-`assist_satellite.announce` API.
+**Requires Home Assistant 2026.11 or newer.** It is installed through the Marketplace
+that Home Assistant 2026.11 has built in (the successor of HACS); older versions are not
+supported.
 
 ## Features
 
@@ -37,12 +39,14 @@ integration relies on the LLM tools platform introduced in 2026.8 and the curren
 
 ## Installation
 
-**HACS (recommended):** click the *Open in HACS* button above, or add
-`https://github.com/Gamer92000/hass_alarm` in HACS as a custom repository of type
-*Integration*. Install it, then restart Home Assistant.
+<!-- ha-marketplace:exclude-start -->
+**Marketplace (recommended):** click the *Open in Marketplace* button above, or go to
+*Settings → Marketplace → Add from link* and enter `Gamer92000/hass_alarm`. Then install
+it. Updates arrive through the Marketplace as well and need a restart of Home Assistant.
 
 **Manual:** copy `custom_components/voice_alarms` into your Home Assistant
 `config/custom_components/` folder and restart Home Assistant.
+<!-- ha-marketplace:exclude-end -->
 
 Then:
 
@@ -167,7 +171,7 @@ Per alarm: `switch.<label>` to enable or disable it (attributes contain all alar
 
 ## Development
 
-Python 3.14 is required (Home Assistant 2026.9 needs it). The pinned test
+Python 3.14 is required (Home Assistant needs >= 3.14.2). The pinned test
 environment is in `requirements_test.txt`; CI runs exactly this:
 
 ```bash
