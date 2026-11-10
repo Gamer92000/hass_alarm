@@ -2,7 +2,7 @@
 
 <img src="custom_components/voice_alarms/brand/icon.png" alt="Voice Alarms icon" width="96" align="right">
 
-[![ci](https://git.imhof.cloud/julian/hass_alarm/actions/workflows/ci.yml/badge.svg?branch=main)](https://git.imhof.cloud/julian/hass_alarm/actions)
+[![ci](https://github.com/Gamer92000/hass_alarm/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Gamer92000/hass_alarm/actions/workflows/ci.yml)
 
 [![Open your Home Assistant instance and open this repository inside HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=Gamer92000&repository=hass_alarm&category=integration)
 [![Open your Home Assistant instance and start setting up the integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=voice_alarms)
