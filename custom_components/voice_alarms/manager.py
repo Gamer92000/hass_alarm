@@ -13,12 +13,21 @@ from typing import Any
 from homeassistant.components.assist_satellite import DOMAIN as ASSIST_SATELLITE_DOMAIN
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EVENT_HOMEASSISTANT_STOP
-from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP, STATE_UNAVAILABLE
+from homeassistant.core import (
+    CALLBACK_TYPE,
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    callback,
+)
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import async_track_point_in_utc_time
+from homeassistant.helpers.event import (
+    async_track_point_in_utc_time,
+    async_track_state_change_event,
+)
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -100,6 +109,10 @@ class AlarmManager:
         self._unsub_timer: CALLBACK_TYPE | None = None
         self._unsub_registry: CALLBACK_TYPE | None = None
         self._unsub_stopping: CALLBACK_TYPE | None = None
+        # Due alarms whose satellite is offline: they ring once it is back, within the
+        # missed grace. Kept to log the wait once.
+        self._waiting: set[str] = set()
+        self._unsub_waiting: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
         self._started = False
 
@@ -239,6 +252,7 @@ class AlarmManager:
         if self._unsub_timer:
             self._unsub_timer()
             self._unsub_timer = None
+        self._cancel_waiting()
         if self._unsub_registry:
             self._unsub_registry()
             self._unsub_registry = None
@@ -736,21 +750,35 @@ class AlarmManager:
         del self.recent_sessions[:-MAX_RECENT_SESSIONS]
         self._notify_ringing()
         entity_id = session.target.entity_id
-        # Alarms handed on to the queue still have to ring.
-        handed_on = {alarm.id for alarm in self._queued.get(entity_id, [])}
+        # Alarms still queued, or ringing in another session, still have to ring.
+        in_play = {alarm.id for queued in self._queued.values() for alarm in queued}
+        in_play.update(
+            alarm.id
+            for other in self.active_sessions()
+            if other is not session
+            for alarm in other.alarms
+        )
         for alarm in session.alarms:
-            if alarm.id not in handed_on:
+            if alarm.id not in in_play:
                 self._fired_from.pop(alarm.id, None)
         # A session that was followed by another one leaves the queue to it.
         if self._started and self.session_for_target(entity_id) is None:
-            if queued := self._queued.pop(entity_id, None):
-                self.hass.async_create_task(self._ring_queued(entity_id, queued))
+            if self._queued.get(entity_id):
+                self.hass.async_create_task(self._ring_queued(entity_id))
 
-    async def _ring_queued(self, entity_id: str, alarms: list[Alarm]) -> None:
-        """Ring what had to wait for the previous session on this satellite."""
+    async def _ring_queued(self, entity_id: str) -> None:
+        """Ring what had to wait for the previous session on this satellite.
+
+        The alarms stay queued until now, so that a shutdown in between still finds them.
+        """
+        alarms = self._queued.pop(entity_id, None)
+        if not alarms:
+            return
         target = self.target(entity_id)
         if target is None:
             _LOGGER.error("Cannot ring queued alarms: satellite %s no longer exists", entity_id)
+            for alarm in alarms:
+                self._fired_from.pop(alarm.id, None)
             return
         for alarm in alarms:
             await self.async_ring(
@@ -765,6 +793,25 @@ class AlarmManager:
             self._unsub_timer()
             self._unsub_timer = None
 
+    @callback
+    def _cancel_waiting(self) -> None:
+        if self._unsub_waiting:
+            self._unsub_waiting()
+            self._unsub_waiting = None
+
+    def _satellite_offline(self, entity_id: str) -> bool:
+        """True while an existing satellite cannot play, as while it reconnects at startup."""
+        if self.target(entity_id) is None:
+            return False  # gone for good: _fire reports it
+        state = self.hass.states.get(entity_id)
+        return state is None or state.state == STATE_UNAVAILABLE
+
+    @callback
+    def _satellite_changed(self, event: Event[EventStateChangedData]) -> None:
+        new_state = event.data["new_state"]
+        if new_state is not None and new_state.state != STATE_UNAVAILABLE:
+            self.hass.async_create_task(self._process())
+
     async def _timer_fired(self, _now: datetime) -> None:
         self._unsub_timer = None
         await self._process()
@@ -778,10 +825,13 @@ class AlarmManager:
             return
         async with self._lock:
             self._cancel_timer()
+            self._cancel_waiting()
             now = dt_util.utcnow()
             grace = self.missed_grace
             due: list[tuple[Alarm, datetime]] = []
             expired: list[Alarm] = []
+            waiting: set[str] = set()
+            offline: set[str] = set()
             next_time: datetime | None = None
             changed = False
 
@@ -803,10 +853,29 @@ class AlarmManager:
                     if not alarm.is_recurring:
                         expired.append(alarm)
                     continue
-                if occurrence <= now:
+                if occurrence <= now and self._satellite_offline(alarm.target):
+                    # Wait for the satellite, until the missed grace runs out.
+                    if alarm.id not in self._waiting:
+                        _LOGGER.info(
+                            "Waiting for %s to come back to ring %s '%s'",
+                            alarm.target,
+                            alarm.kind,
+                            alarm.label,
+                        )
+                    waiting.add(alarm.id)
+                    offline.add(alarm.target)
+                    deadline = occurrence + grace
+                    if next_time is None or deadline < next_time:
+                        next_time = deadline
+                elif occurrence <= now:
                     due.append((alarm, occurrence))
                 elif next_time is None or occurrence < next_time:
                     next_time = occurrence
+            self._waiting = waiting
+            if offline:
+                self._unsub_waiting = async_track_state_change_event(
+                    self.hass, sorted(offline), self._satellite_changed
+                )
 
             for alarm in expired:
                 _LOGGER.info("Removing expired one-time %s '%s'", alarm.kind, alarm.label)
