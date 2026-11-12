@@ -13,6 +13,7 @@ from typing import Any
 from homeassistant.components.assist_satellite import DOMAIN as ASSIST_SATELLITE_DOMAIN
 from homeassistant.components.ffmpeg import get_ffmpeg_manager
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
 from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -90,10 +91,14 @@ class AlarmManager:
         self.recent_sessions: list[RingSession] = []
         # Reminders that fired while an alarm rang on their satellite; spoken after it.
         self._queued: dict[str, list[Alarm]] = {}
+        # last_fired of each alarm ringing or queued now, from before it fired; a restart
+        # that interrupts the ring puts it back, so that the alarm rings after the restart.
+        self._fired_from: dict[str, datetime | None] = {}
         self.ffmpeg_binary: str | None = None
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._unsub_timer: CALLBACK_TYPE | None = None
         self._unsub_registry: CALLBACK_TYPE | None = None
+        self._unsub_stopping: CALLBACK_TYPE | None = None
         self._lock = asyncio.Lock()
         self._started = False
 
@@ -221,6 +226,9 @@ class AlarmManager:
             self._registry_updated,
             event_filter=_satellite_registry_filter,
         )
+        self._unsub_stopping = self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STOP, self._hass_stopping
+        )
         self._started = True
         await self._process()
 
@@ -233,13 +241,53 @@ class AlarmManager:
         if self._unsub_registry:
             self._unsub_registry()
             self._unsub_registry = None
+        if self._unsub_stopping:
+            self._unsub_stopping()
+            self._unsub_stopping = None
         self._queued.clear()
+        self._fired_from.clear()
         sessions = list(self.sessions.values())
         for session in sessions:
             session.dismiss(by="shutdown")
         for session in sessions:
             await session.wait_finished()
         await self._store.async_save(self._data_to_save())
+
+    @callback
+    def _hass_stopping(self, _event: Event) -> None:
+        """Keep the alarms a restart interrupts, so that they ring after it.
+
+        Config entries are not unloaded on shutdown: a ring that started just before
+        plays into satellites that are disconnecting. Its alarm is put back as it was
+        before it fired, and the missed alarm catch-up rings it once Home Assistant is
+        back, within the missed grace. A dismissed ring is over and stays so.
+        """
+        self._unsub_stopping = None
+        interrupted = [
+            alarm
+            for session in self.active_sessions()
+            if not session.dismissed
+            for alarm in session.alarms
+        ]
+        interrupted += [alarm for queued in self._queued.values() for alarm in queued]
+        self._queued.clear()
+        changed = False
+        for alarm in interrupted:
+            if alarm.id not in self._fired_from:
+                continue
+            previous = self._fired_from.pop(alarm.id)
+            current = self.alarms.get(alarm.id)
+            if current is None and not alarm.is_recurring:
+                current = self.alarms[alarm.id] = alarm  # one-time: removed when it fired
+            # Deleted, or rescheduled since it fired: nothing to put back.
+            if current is None or current.last_fired != alarm.last_fired:
+                continue
+            _LOGGER.info("Keeping %s '%s' interrupted by the shutdown", alarm.kind, alarm.label)
+            current.last_fired = previous
+            changed = True
+        if changed:
+            self._save()
+            self._notify_alarms()
 
     def _find_ffmpeg(self) -> str | None:
         try:
@@ -683,6 +731,11 @@ class AlarmManager:
         del self.recent_sessions[:-MAX_RECENT_SESSIONS]
         self._notify_ringing()
         entity_id = session.target.entity_id
+        # Alarms handed on to the queue still have to ring.
+        handed_on = {alarm.id for alarm in self._queued.get(entity_id, [])}
+        for alarm in session.alarms:
+            if alarm.id not in handed_on:
+                self._fired_from.pop(alarm.id, None)
         # A session that was followed by another one leaves the queue to it.
         if self._started and self.session_for_target(entity_id) is None:
             if queued := self._queued.pop(entity_id, None):
@@ -775,6 +828,7 @@ class AlarmManager:
                 _LOGGER.debug("Next alarm check at %s", next_time)
 
     async def _fire(self, alarm: Alarm, occurrence: datetime) -> None:
+        previous = alarm.last_fired
         alarm.last_fired = occurrence
         if alarm.skipped_occurrence is not None and alarm.skipped_occurrence <= occurrence:
             alarm.skipped_occurrence = None
@@ -788,6 +842,7 @@ class AlarmManager:
             )
         else:
             _LOGGER.info("Ringing %s '%s' on %s", alarm.kind, alarm.label, target.display)
+            self._fired_from[alarm.id] = previous
             await self.async_ring(
                 target,
                 alarm=alarm,
