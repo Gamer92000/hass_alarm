@@ -311,7 +311,7 @@ class Alarm:
         """Return the still-pending occurrence on the local ``day``, ignoring skips."""
         start = combine_local(day, time(0, 0))
         end = combine_local(day + timedelta(days=1), time(0, 0))
-        after = max(now, self.pending_after(), start - timedelta(microseconds=1))
+        after = max(self.upcoming_after(now), start - timedelta(microseconds=1))
         at = self.next_scheduled(after)
         if at is None or at >= end:
             return None

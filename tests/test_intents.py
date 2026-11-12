@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
+from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.voice_alarms.const import (
     INTENT_DELETE,
@@ -506,3 +507,26 @@ async def test_list_for_a_day(hass: HomeAssistant, ready, satellites) -> None:
     response = await handle(hass, INTENT_LIST, bedroom, date="someday")
     assert response.response_type == intent.IntentResponseType.ERROR
     assert "not a valid date" in speech(response)
+
+
+async def test_alarm_waiting_for_its_satellite_is_next_by_voice(
+    hass: HomeAssistant, ready, satellites, freezer: FrozenDateTimeFactory
+) -> None:
+    """Asked from another satellite: the waiting ring is next, and skipping skips it."""
+    kitchen = satellites["kitchen"]
+    bedroom = satellites["bedroom"]["device_id"]
+    await handle(hass, INTENT_SET, kitchen["device_id"], time="10:05", weekdays="daily")
+    hass.states.async_set(kitchen["satellite"], "unavailable")
+    hass.states.async_set(kitchen["media_player"], "unavailable")
+    at = START.replace(minute=5, second=1)
+    freezer.move_to(at)
+    async_fire_time_changed(hass, at)
+    await hass.async_block_till_done()
+
+    text = speech(await handle(hass, INTENT_LIST, bedroom, target="kitchen"))
+    assert "today at 10:05 (as soon as the satellite is back)" in text
+    assert "in the past" not in text
+
+    text = speech(await handle(hass, INTENT_SKIP_NEXT, bedroom, target="kitchen"))
+    assert "today at 10:05" in text
+    assert "tomorrow" in text

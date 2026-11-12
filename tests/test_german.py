@@ -133,7 +133,9 @@ def test_format_relative_german() -> None:
         "in 2 Tagen und 3 Stunden"
     )
     assert format_relative(START + timedelta(days=1), START, "de") == "in 1 Tag"
-    assert format_relative(START - timedelta(seconds=1), START, "de") == "in der Vergangenheit"
+    assert format_relative(START - timedelta(seconds=1), START, "de") == (
+        "sobald der Satellit wieder da ist"
+    )
     assert format_relative(START + timedelta(seconds=30), START, "de") == (
         "in weniger als einer Minute"
     )

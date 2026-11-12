@@ -49,12 +49,15 @@ def _unit(n: int, unit: str, language: str) -> str:
 def format_relative(
     target: datetime, now: datetime | None = None, language: str = DEFAULT_LANGUAGE
 ) -> str:
-    """Return 'in 2 hours and 5 minutes' style text."""
+    """Return 'in 2 hours and 5 minutes' style text.
+
+    A next ring already due is one waiting for its satellite to come back.
+    """
     now = now or dt_util.utcnow()
     delta = target - now
     seconds = int(delta.total_seconds())
     if seconds < 0:
-        return tr(language, "rel_past")
+        return tr(language, "rel_waiting")
     if seconds < 60:
         return tr(language, "rel_under_minute")
     minutes, _ = divmod(seconds, 60)
@@ -157,7 +160,7 @@ def describe_alarm(
     if not alarm.enabled:
         return text + tr(language, "alarm_desc_disabled")
     if with_next:
-        after = max(now, alarm.pending_after())
+        after = alarm.upcoming_after(now)
         nxt = alarm.next_occurrence(after)
         scheduled = alarm.next_scheduled(after)
         if (

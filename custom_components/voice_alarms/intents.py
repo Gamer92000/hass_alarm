@@ -633,7 +633,7 @@ class SkipNextIntent(_VoiceAlarmIntent):
                 {"alarm_id": alarm.id, "next": nxt.isoformat() if nxt else None}
             )
             return
-        after = max(now, alarm.pending_after())
+        after = alarm.upcoming_after(now)
         scheduled = alarm.next_scheduled(after)
         if scheduled is not None and alarm.skipped_occurrence == scheduled:
             nxt = alarm.next_pending(now)
@@ -984,7 +984,7 @@ def _alarm_summary(alarm: Alarm, now: datetime, lang: str) -> dict[str, Any]:
 
 def _next_ring(alarm: Alarm, now: datetime) -> datetime | None:
     """The alarm's very next scheduled ring, skipped or not."""
-    return alarm.next_scheduled(max(now, alarm.pending_after()))
+    return alarm.next_scheduled(alarm.upcoming_after(now))
 
 
 def _next_ring_day(alarm: Alarm, now: datetime) -> date:
