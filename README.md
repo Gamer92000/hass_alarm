@@ -33,8 +33,10 @@ supported.
 - Built-in bell sound; any URL or `media-source://` file can be used instead, globally or
   per alarm.
 - Reminders are spoken (text-to-speech) instead of ringing, repeated a few times.
-- Missed alarms (e.g. Home Assistant restarted at alarm time, or the satellite was offline) still
-  ring within a grace period, once the satellite is back.
+- Missed alarms (e.g. Home Assistant restarted at alarm time) still ring within a grace period.
+  An alarm whose satellite is offline (unavailable in Home Assistant, and its media player too)
+  waits for it within that period. Satellites that do not report being offline, such as
+  Wyoming ones, cannot be waited for.
 - English and German throughout: panel, config flow, entities, services and the spoken
   responses.
 
@@ -132,7 +134,7 @@ interrupted by anything that is due.
 | Satellite volume while ringing | *(empty)* | If set, the satellite media player is set to this volume during the alarm and restored afterwards. |
 | Alarm sound | built-in | http(s) URL, `/local/...` path or `media-source://media_source/local/file.mp3` (also for the per-alarm sound; downloads for ffmpeg are capped at 20 MB). Can be overridden per alarm. |
 | Reminder repeats / pause | 3 × 60 s | How often and how spaced a reminder is spoken. |
-| Missed alarm grace | 600 s | An alarm that was missed by less than this (restart, downtime, satellite offline) still rings. |
+| Missed alarm grace | 600 s | An alarm that was missed by less than this (restart, downtime, satellite offline) still rings. With 0, only alarms on time ring. |
 | Resume ringing after device stop | 0 s | 0 = a stop on the device dismisses the alarm; otherwise the alarm pauses that many seconds and rings again. |
 
 ## Services

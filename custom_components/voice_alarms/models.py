@@ -210,6 +210,8 @@ class Alarm:
     skipped_occurrence: datetime | None = None
     last_fired: datetime | None = None
     created: datetime = field(default_factory=dt_util.utcnow)
+    # Not stored: a due occurrence waiting for its offline satellite (set by the manager).
+    waiting: datetime | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         """Normalise fields."""
@@ -288,11 +290,22 @@ class Alarm:
             return self.last_fired
         return self.created
 
+    def upcoming_after(self, now: datetime) -> datetime:
+        """Reference point for the next occurrence to show or skip.
+
+        Occurrences after now, unless one is due but waits for its satellite: that one
+        comes next.
+        """
+        pending_after = self.pending_after()
+        if self.waiting is not None and self.waiting > pending_after:
+            return pending_after
+        return max(now, pending_after)
+
     def next_pending(self, now: datetime) -> datetime | None:
         """Return the next occurrence that still has to fire (>= now context)."""
         if not self.enabled:
             return None
-        return self.next_occurrence(max(now, self.pending_after()))
+        return self.next_occurrence(self.upcoming_after(now))
 
     def occurrence_on(self, day: date, now: datetime) -> datetime | None:
         """Return the still-pending occurrence on the local ``day``, ignoring skips."""
@@ -350,7 +363,7 @@ class Alarm:
     def public_dict(self, now: datetime | None = None) -> dict[str, Any]:
         """Serialise for the frontend / service responses with computed fields."""
         now = now or dt_util.utcnow()
-        after = max(now, self.pending_after())
+        after = self.upcoming_after(now)
         nxt = self.next_occurrence(after) if self.enabled else None
         scheduled = self.next_scheduled(after) if self.enabled else None
         data = self.to_dict()

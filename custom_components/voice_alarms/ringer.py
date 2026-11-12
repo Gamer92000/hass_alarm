@@ -121,6 +121,8 @@ class RingSession:
         self.state = STATE_RINGING
         self.dismissed = False
         self.dismissed_by: str | None = None
+        # Ended because playback kept failing (as on a satellite gone offline).
+        self.gave_up = False
         self.finished_at: datetime | None = None
         self.context = Context()
 
@@ -355,6 +357,7 @@ class RingSession:
                         _LOGGER.error(
                             "Giving up ringing %s: playback keeps failing", self.target.entity_id
                         )
+                        self.gave_up = True
                         break
                     await self._sleep(ANNOUNCE_RETRY_SECONDS)
                     elapsed += ANNOUNCE_RETRY_SECONDS
@@ -415,6 +418,7 @@ class RingSession:
                     _LOGGER.error(
                         "Giving up ringing %s: playback keeps failing", self.target.entity_id
                     )
+                    self.gave_up = True
                     break
                 _LOGGER.debug(
                     "Retrying alarm playback on %s (%s)", self.target.entity_id, spec.error

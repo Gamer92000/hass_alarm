@@ -51,11 +51,13 @@ from .const import (
     DEFAULT_RAMP_START,
     DEFAULT_REMINDER_INTERVAL,
     DEFAULT_REMINDER_REPEATS,
+    DISMISSED_ON_PURPOSE,
     DOMAIN,
     KIND_ALARM,
     KIND_REMINDER,
     MAX_ALARM_DURATION,
     MAX_SNOOZE_MINUTES,
+    ON_TIME_SECONDS,
     SIGNAL_ALARMS_UPDATED,
     SIGNAL_CONFIG_UPDATED,
     SIGNAL_RINGING_UPDATED,
@@ -109,10 +111,11 @@ class AlarmManager:
         self._unsub_timer: CALLBACK_TYPE | None = None
         self._unsub_registry: CALLBACK_TYPE | None = None
         self._unsub_stopping: CALLBACK_TYPE | None = None
-        # Due alarms whose satellite is offline: they ring once it is back, within the
-        # missed grace. Kept to log the wait once.
-        self._waiting: set[str] = set()
+        # Listens to the offline satellites that due alarms wait for.
         self._unsub_waiting: CALLBACK_TYPE | None = None
+        # What the shutdown put back, as in _fired_from: a ring dismissed later in the
+        # shutdown is over after all.
+        self._put_back_at_stop: dict[str, tuple[datetime | None, datetime]] = {}
         self._lock = asyncio.Lock()
         self._started = False
 
@@ -289,20 +292,49 @@ class AlarmManager:
         ]
         interrupted += [alarm for queued in self._queued.values() for alarm in queued]
         self._queued.clear()
-        changed = False
-        for alarm in interrupted:
-            if alarm.id not in self._fired_from:
+        self._put_back_at_stop = self._put_back(interrupted, "interrupted by the shutdown")
+
+    @callback
+    def _put_back(
+        self, alarms: list[Alarm], why: str
+    ) -> dict[str, tuple[datetime | None, datetime]]:
+        """Put alarms that fired back as they were before, so that they are due again.
+
+        Returns the records of those put back. One-time alarms return to the list they
+        left when they fired. An alarm deleted or rescheduled since it fired (an update
+        resets last_fired in place) stays as it is.
+        """
+        put_back: dict[str, tuple[datetime | None, datetime]] = {}
+        for alarm in alarms:
+            record = self._fired_from.pop(alarm.id, None)
+            if record is None:
                 continue
-            previous, occurrence = self._fired_from.pop(alarm.id)
+            previous, occurrence = record
             current = self.alarms.get(alarm.id)
             if current is None and not alarm.is_recurring:
-                current = self.alarms[alarm.id] = alarm  # one-time: removed when it fired
-            # Deleted, or rescheduled since it fired (an update resets last_fired in
-            # place): nothing to put back.
+                current = self.alarms[alarm.id] = alarm
             if current is None or current.last_fired != occurrence:
                 continue
-            _LOGGER.info("Keeping %s '%s' interrupted by the shutdown", alarm.kind, alarm.label)
+            _LOGGER.info("Keeping %s '%s' %s", alarm.kind, alarm.label, why)
             current.last_fired = previous
+            put_back[alarm.id] = record
+        if put_back:
+            self._save()
+            self._notify_alarms()
+        return put_back
+
+    @callback
+    def _dismissed_while_stopping(self, session: RingSession) -> None:
+        """A ring the shutdown put back was dismissed after all: it stays rung."""
+        changed = False
+        for alarm in session.alarms:
+            record = self._put_back_at_stop.pop(alarm.id, None)
+            current = self.alarms.get(alarm.id)
+            if record is None or current is None or current.last_fired != record[0]:
+                continue
+            current.last_fired = record[1]
+            if not current.is_recurring:
+                self.alarms.pop(alarm.id)
             changed = True
         if changed:
             self._save()
@@ -369,6 +401,9 @@ class AlarmManager:
         Its alarms stay (they can be moved to another satellite), and so does
         the device while they still need it for their switches.
         """
+        if self._started:
+            # An alarm waiting for it is reported now, not missed later.
+            self.hass.async_create_task(self._process())
         ent_reg = er.async_get(self.hass)
         for suffix, platform in TARGET_ENTITY_SUFFIXES.items():
             if registered := ent_reg.async_get_entity_id(platform, DOMAIN, f"{entity_id}{suffix}"):
@@ -598,7 +633,7 @@ class AlarmManager:
         if not alarm.is_recurring:
             raise AlarmError("err_skip_not_recurring")
         now = dt_util.utcnow()
-        after = max(now, alarm.pending_after())
+        after = alarm.upcoming_after(now)
         if undo:
             skipped = alarm.skipped_occurrence
             alarm.skipped_occurrence = None
@@ -750,6 +785,17 @@ class AlarmManager:
         del self.recent_sessions[:-MAX_RECENT_SESSIONS]
         self._notify_ringing()
         entity_id = session.target.entity_id
+        if not self._started and session.dismissed_by in DISMISSED_ON_PURPOSE:
+            self._dismissed_while_stopping(session)
+        if (
+            self._started
+            and session.gave_up
+            and not session.dismissed
+            and self._satellite_offline(entity_id)
+        ):
+            # The satellite went away mid-ring: wait for it, as for a due alarm.
+            self._put_back(session.alarms, f"until {entity_id} is back")
+            self.hass.async_create_task(self._process())
         # Alarms still queued, or ringing in another session, still have to ring.
         in_play = {alarm.id for queued in self._queued.values() for alarm in queued}
         in_play.update(
@@ -780,6 +826,10 @@ class AlarmManager:
             for alarm in alarms:
                 self._fired_from.pop(alarm.id, None)
             return
+        if self._satellite_offline(entity_id):
+            self._put_back(alarms, f"until {entity_id} is back")
+            await self._process()
+            return
         for alarm in alarms:
             await self.async_ring(
                 target, alarm=alarm, kind=alarm.kind, message=alarm.message, label=alarm.label
@@ -800,16 +850,28 @@ class AlarmManager:
             self._unsub_waiting = None
 
     def _satellite_offline(self, entity_id: str) -> bool:
-        """True while an existing satellite cannot play, as while it reconnects at startup."""
-        if self.target(entity_id) is None:
+        """True while an existing satellite cannot play, as while it reconnects at startup.
+
+        Its media player, when available, still rings: the session falls back to it.
+        """
+        target = self.target(entity_id)
+        if target is None:
             return False  # gone for good: _fire reports it
-        state = self.hass.states.get(entity_id)
-        return state is None or state.state == STATE_UNAVAILABLE
+        return all(
+            (state := self.hass.states.get(watched)) is None or state.state == STATE_UNAVAILABLE
+            for watched in self._watched(target)
+        )
+
+    @staticmethod
+    def _watched(target: Target) -> list[str]:
+        """Entities whose coming back lets an alarm on ``target`` ring."""
+        return [target.entity_id, *([target.media_player] if target.media_player else [])]
 
     @callback
     def _satellite_changed(self, event: Event[EventStateChangedData]) -> None:
         new_state = event.data["new_state"]
-        if new_state is not None and new_state.state != STATE_UNAVAILABLE:
+        # Back, or removed (then the alarm is reported as having no satellite).
+        if new_state is None or new_state.state != STATE_UNAVAILABLE:
             self.hass.async_create_task(self._process())
 
     async def _timer_fired(self, _now: datetime) -> None:
@@ -828,21 +890,28 @@ class AlarmManager:
             self._cancel_waiting()
             now = dt_util.utcnow()
             grace = self.missed_grace
+            # Checked a moment after its time, an alarm is on time even with no grace.
+            missed_before = now - grace - timedelta(seconds=ON_TIME_SECONDS)
             due: list[tuple[Alarm, datetime]] = []
             expired: list[Alarm] = []
-            waiting: set[str] = set()
             offline: set[str] = set()
+            waiting_changed = False
             next_time: datetime | None = None
             changed = False
 
             for alarm in list(self.alarms.values()):
-                if alarm.skipped_occurrence is not None and alarm.skipped_occurrence < now - grace:
+                if (
+                    alarm.skipped_occurrence is not None
+                    and alarm.skipped_occurrence < missed_before
+                ):
                     alarm.skipped_occurrence = None
                     changed = True
+                was_waiting, alarm.waiting = alarm.waiting, None
                 if not alarm.enabled:
+                    waiting_changed |= was_waiting is not None
                     continue
                 occurrence = alarm.next_occurrence(alarm.pending_after())
-                while occurrence is not None and occurrence < now - grace:
+                while occurrence is not None and occurrence < missed_before:
                     _LOGGER.warning(
                         "Missed %s '%s' scheduled %s", alarm.kind, alarm.label, occurrence
                     )
@@ -850,28 +919,32 @@ class AlarmManager:
                     changed = True
                     occurrence = alarm.next_occurrence(occurrence)
                 if occurrence is None:
+                    waiting_changed |= was_waiting is not None
                     if not alarm.is_recurring:
                         expired.append(alarm)
                     continue
                 if occurrence <= now and self._satellite_offline(alarm.target):
                     # Wait for the satellite, until the missed grace runs out.
-                    if alarm.id not in self._waiting:
+                    if was_waiting != occurrence:
                         _LOGGER.info(
                             "Waiting for %s to come back to ring %s '%s'",
                             alarm.target,
                             alarm.kind,
                             alarm.label,
                         )
-                    waiting.add(alarm.id)
-                    offline.add(alarm.target)
-                    deadline = occurrence + grace
+                        waiting_changed = True
+                    alarm.waiting = occurrence
+                    target = self.target(alarm.target)
+                    offline.update(self._watched(target) if target else [])
+                    deadline = occurrence + grace + timedelta(seconds=ON_TIME_SECONDS)
                     if next_time is None or deadline < next_time:
                         next_time = deadline
-                elif occurrence <= now:
-                    due.append((alarm, occurrence))
-                elif next_time is None or occurrence < next_time:
-                    next_time = occurrence
-            self._waiting = waiting
+                else:
+                    waiting_changed |= was_waiting is not None
+                    if occurrence <= now:
+                        due.append((alarm, occurrence))
+                    elif next_time is None or occurrence < next_time:
+                        next_time = occurrence
             if offline:
                 self._unsub_waiting = async_track_state_change_event(
                     self.hass, sorted(offline), self._satellite_changed
@@ -888,6 +961,7 @@ class AlarmManager:
 
             if changed:
                 self._save()
+            if changed or waiting_changed:
                 self._notify_alarms()
 
             if due:

@@ -87,6 +87,10 @@ ANNOUNCE_REFUSED_SECONDS: Final = 1.0
 PLAYER_START_TIMEOUT: Final = 10.0
 PLAYER_POLL_SECONDS: Final = 0.25
 RECENTLY_DISMISSED_SECONDS: Final = 180
+# An alarm checked this late is still on time, not missed, even with no missed grace.
+ON_TIME_SECONDS: Final = 10
+# Who ended a ring on purpose (rather than a shutdown or another ring taking over).
+DISMISSED_ON_PURPOSE: Final = frozenset({"user", "device", "snooze"})
 # Custom sounds fetched over HTTP for ffmpeg are refused above this size.
 MAX_SOUND_DOWNLOAD_BYTES: Final = 20_000_000
 
