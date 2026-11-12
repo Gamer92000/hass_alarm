@@ -200,6 +200,69 @@ async def test_alarm_ringing_when_stopping_rings_again_after_the_restart(
     await hass.async_block_till_done()
 
 
+async def test_shutdown_saves_the_alarms_it_puts_back(
+    hass: HomeAssistant,
+    hass_storage,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """A real shutdown, which does not unload the entry, still stores what it put back."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    bedroom = satellites["bedroom"]["satellite"]
+    once = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=bedroom, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert len(blocking_announce.calls) == 2
+    # The save after firing is done before the shutdown starts.
+    await _advance(hass, freezer, START.replace(minute=5, second=5))
+    assert {a["id"] for a in hass_storage[STORAGE_KEY]["data"]["alarms"]} == {daily.id}
+
+    await hass.async_stop()
+    stored = {a["id"]: a for a in hass_storage[STORAGE_KEY]["data"]["alarms"]}
+    assert stored.keys() == {once.id, daily.id}
+    assert stored[once.id]["last_fired"] is None
+    assert stored[daily.id]["last_fired"] is None
+
+
+async def test_recurring_alarm_rescheduled_while_ringing_keeps_its_change(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """An alarm moved while it rings is not put back as it was before it fired."""
+    freezer.move_to(START)
+    bedroom = satellites["bedroom"]["satellite"]
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=bedroom, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    yesterday = START.replace(minute=5) - timedelta(days=1)
+    daily.created = yesterday - timedelta(hours=1)
+    daily.last_fired = yesterday
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert len(blocking_announce.calls) == 1
+
+    await manager.async_update_alarm(daily.id, time=time(10, 3))
+    hass.set_state(CoreState.stopping)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    # Moved to a time already past today: the next ring is tomorrow, not a catch-up now.
+    assert daily.next_occurrence(daily.pending_after()) == START.replace(minute=3) + timedelta(
+        days=1
+    )
+    hass.set_state(CoreState.running)
+
+
 async def test_dismissed_ring_is_not_put_back_when_stopping(
     hass: HomeAssistant,
     local_tz,

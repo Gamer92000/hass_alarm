@@ -91,9 +91,10 @@ class AlarmManager:
         self.recent_sessions: list[RingSession] = []
         # Reminders that fired while an alarm rang on their satellite; spoken after it.
         self._queued: dict[str, list[Alarm]] = {}
-        # last_fired of each alarm ringing or queued now, from before it fired; a restart
-        # that interrupts the ring puts it back, so that the alarm rings after the restart.
-        self._fired_from: dict[str, datetime | None] = {}
+        # Each alarm ringing or queued now: its last_fired from before it fired, and the
+        # occurrence it fired for. A restart that interrupts the ring puts last_fired
+        # back, so that the alarm rings after the restart.
+        self._fired_from: dict[str, tuple[datetime | None, datetime]] = {}
         self.ffmpeg_binary: str | None = None
         self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._unsub_timer: CALLBACK_TYPE | None = None
@@ -263,6 +264,9 @@ class AlarmManager:
         back, within the missed grace. A dismissed ring is over and stays so.
         """
         self._unsub_stopping = None
+        # Nothing more is fired or rung from the queue: the state goes back to
+        # not_running before the end, where the is_stopping guard no longer holds.
+        self._started = False
         interrupted = [
             alarm
             for session in self.active_sessions()
@@ -275,12 +279,13 @@ class AlarmManager:
         for alarm in interrupted:
             if alarm.id not in self._fired_from:
                 continue
-            previous = self._fired_from.pop(alarm.id)
+            previous, occurrence = self._fired_from.pop(alarm.id)
             current = self.alarms.get(alarm.id)
             if current is None and not alarm.is_recurring:
                 current = self.alarms[alarm.id] = alarm  # one-time: removed when it fired
-            # Deleted, or rescheduled since it fired: nothing to put back.
-            if current is None or current.last_fired != alarm.last_fired:
+            # Deleted, or rescheduled since it fired (an update resets last_fired in
+            # place): nothing to put back.
+            if current is None or current.last_fired != occurrence:
                 continue
             _LOGGER.info("Keeping %s '%s' interrupted by the shutdown", alarm.kind, alarm.label)
             current.last_fired = previous
@@ -842,7 +847,7 @@ class AlarmManager:
             )
         else:
             _LOGGER.info("Ringing %s '%s' on %s", alarm.kind, alarm.label, target.display)
-            self._fired_from[alarm.id] = previous
+            self._fired_from[alarm.id] = (previous, occurrence)
             await self.async_ring(
                 target,
                 alarm=alarm,
