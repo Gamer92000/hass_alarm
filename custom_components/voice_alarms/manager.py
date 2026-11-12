@@ -713,7 +713,10 @@ class AlarmManager:
 
     async def _process(self) -> None:
         """Fire due alarms and schedule the next wake-up."""
-        if not self._started:
+        # Config entries are not unloaded on shutdown, so the timer still runs while Home
+        # Assistant stops. Firing then would ring nothing and drop a one-time alarm; left
+        # alone, it is caught up within the missed grace when Home Assistant is back.
+        if not self._started or self.hass.is_stopping:
             return
         async with self._lock:
             self._cancel_timer()
