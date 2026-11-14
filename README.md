@@ -34,8 +34,11 @@ supported.
   per alarm.
 - Reminders are spoken (text-to-speech) instead of ringing, repeated a few times.
 - Missed alarms (e.g. Home Assistant restarted at alarm time) still ring within a grace period.
-- English and German throughout: panel, config flow, entities, services and the spoken
-  responses.
+  An alarm whose satellite is offline (unavailable in Home Assistant, and its media player too)
+  waits for it within that period. Satellites that do not report being offline, such as
+  Wyoming ones, cannot be waited for.
+- English, German and Brazilian Portuguese throughout: panel, config flow, entities,
+  services and the spoken responses.
 
 ## Installation
 
@@ -67,6 +70,7 @@ automatically. No extra configuration is needed. Examples:
 | You say | What happens |
 | --- | --- |
 | "Wake me at 6:30" | One-time alarm on this satellite, tomorrow (or today if still ahead). |
+| "Wake me at 8" | At 08:00, tomorrow or today. With the option *time without morning or evening*, at 08:00 or 20:00, whichever comes first. |
 | "Set an alarm for 7 on weekdays called work" | Repeating alarm Mon–Fri. |
 | "Set an alarm for 8 tomorrow in the bedroom" | Target another satellite by name or area. |
 | "Remind me at 5 pm to call mom" | Spoken reminder. |
@@ -81,12 +85,18 @@ The tool responses are precise sentences such as
 *"Created repeating alarm 'work' at 06:30 weekdays on Kitchen, next tomorrow (Tuesday 8
 September) at 06:30 (in 20 hours and 12 minutes)."* and the LLM is instructed to relay them.
 
-Responses are given in the language of the conversation. English and German are built in;
-any other language gets English, which the LLM translates. The parsers also understand
-German words (*morgen*, *übermorgen*, *wochentags*, *montag*, *7 Uhr*, …). Everything tied
+Responses are given in the language of the conversation. English, German and Portuguese
+are built in; any other language gets English, which the LLM translates. Portuguese replies
+say times in words ("às sete e meia", "à uma hora"), because text-to-speech reads "07:30"
+digit by digit there. The parsers also
+understand German words (*morgen*, *übermorgen*, *wochentags*, *montag*, *7 Uhr*, …) and
+Portuguese ones (*amanhã*, *depois de amanhã*, *dias úteis*, *segunda*, *7 da manhã*,
+*meio-dia*, …). Everything tied
 to the instance rather than to a conversation follows the Home Assistant language setting:
-the default alarm labels ("Wecker 07:00"), the spoken *Erinnerung:* prefix of reminders,
-snooze names and service errors.
+the default alarm labels in the panel ("Wecker 07:00"; a reply names them in the language
+of the conversation), snooze names and service errors. The spoken
+*Erinnerung:* prefix of reminders is in the language of the satellite's pipeline, the voice
+that speaks it.
 
 The built-in (non-LLM) Assist agent does not have sentences for these intents out of the
 box. You can add your own under `custom_sentences/<lang>/voice_alarms.yaml` targeting the
@@ -131,8 +141,9 @@ interrupted by anything that is due.
 | Satellite volume while ringing | *(empty)* | If set, the satellite media player is set to this volume during the alarm and restored afterwards. |
 | Alarm sound | built-in | http(s) URL, `/local/...` path or `media-source://media_source/local/file.mp3` (also for the per-alarm sound; downloads for ffmpeg are capped at 20 MB). Can be overridden per alarm. |
 | Reminder repeats / pause | 3 × 60 s | How often and how spaced a reminder is spoken. |
-| Missed alarm grace | 600 s | An alarm that was missed by less than this (restart, downtime) still rings. |
+| Missed alarm grace | 600 s | An alarm that was missed by less than this (restart, downtime, satellite offline) still rings. With 0, only alarms on time ring. |
 | Resume ringing after device stop | 0 s | 0 = a stop on the device dismisses the alarm; otherwise the alarm pauses that many seconds and rings again. |
+| Time without morning or evening | off | Off: "at 8" is 08:00. On: a time from 1 to 12 o'clock said without morning, evening, am or pm ("at 8", "at 10:30", "um 8 Uhr", "às 7h30") rings at whichever of the morning and the evening time comes first, so "wake me at 8" said at 10:00 rings at 20:00. A day ("tomorrow at 8") or repeat days keep the morning, and so does a time with a leading zero ("08:00"). The same holds for moving an alarm to a new time, and "my alarm at 8" finds the alarm at 08:00 and the one at 20:00. |
 
 ## Services
 

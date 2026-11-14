@@ -7,7 +7,7 @@ tool descriptions stay English because they are read by the LLM, not the user.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -31,9 +31,17 @@ from .const import (
     RECENTLY_DISMISSED_SECONDS,
     WEEKDAY_CODES,
 )
-from .i18n import LocalizedError, normalize_language, tr
+from .i18n import LocalizedError, format_clock, normalize_language, tr
 from .manager import AlarmManager
-from .models import Alarm, parse_date, parse_time, parse_weekdays
+from .models import (
+    Alarm,
+    both_halves,
+    parse_date,
+    parse_time,
+    parse_twelve_hour,
+    parse_weekdays,
+    sooner_half_day,
+)
 from .ringer import STATE_PAUSED, RingSession
 from .speech import (
     capitalize,
@@ -67,6 +75,27 @@ MATCH_HELP = "Filters to pick the alarm(s): alarm_id (exact), name, time, weekda
 ID_FILTER_HELP = "Exact alarm id from a previous listing."
 NAME_FILTER_HELP = "Name or label of the alarm, to find it."
 TIME_FILTER_HELP = "Ring time of the alarm, to find it; 24-hour HH:MM."
+# With the twelve hour option a time said without morning or evening reaches the intent as
+# said, and the intent picks the half of the day.
+TWELVE_HOUR_RULE = (
+    "A time from 1 to 12 o'clock said without morning, evening, am or pm: pass it exactly as "
+    "said ('8', '10:30'). A time said with morning, evening, am or pm: always add am or pm "
+    "('10:30 in the morning' is '10:30 am', never '10:30'; '8 in the evening' is '8 pm'). "
+    "A time from 13 to 23 o'clock: 24-hour HH:MM ('20:00')."
+)
+TIME_HELP_TWELVE_HOUR = (
+    "Time. " + TWELVE_HOUR_RULE + " Without am or pm it rings at whichever of the morning "
+    "and the evening time comes first, or in the morning when a date or weekdays are given."
+)
+TIME_FILTER_HELP_TWELVE_HOUR = (
+    "Ring time of the alarm, to find it. " + TWELVE_HOUR_RULE + " Without am or pm it finds "
+    "both the morning and the evening alarm."
+)
+NEW_TIME_HELP_TWELVE_HOUR = (
+    "New time. " + TWELVE_HOUR_RULE + " Without am or pm a one-time alarm rings at whichever "
+    "of the morning and the evening time comes first, a repeating alarm or one given a new "
+    "date in the morning."
+)
 WEEKDAYS_FILTER_HELP = (
     "Repeat days of the alarm, to find it: list or comma separated "
     f"{', '.join(WEEKDAY_CODES)}, or 'daily', 'weekdays', 'weekends'."
@@ -85,10 +114,32 @@ class _VoiceAlarmIntent(intent.IntentHandler):
     """Base class."""
 
     platforms = None
-    slot_schema: dict[str, Any] | None = None
+    slots: dict[Any, Any] | None = None
+    # Slot descriptions that replace those in ``slots`` with the twelve hour option.
+    twelve_hour_help: dict[str, str] = {}
 
     def __init__(self, manager: AlarmManager) -> None:
         self.manager = manager
+
+    @property
+    def slot_schema(self) -> dict[Any, Any] | None:
+        """Slots, described for the LLM as the twelve hour option wants them."""
+        if self.slots is None or not self.twelve_hour_help or not self.manager.twelve_hour:
+            return self.slots
+        return {
+            (
+                type(key)(key.schema, description=self.twelve_hour_help[key.schema])
+                if key.schema in self.twelve_hour_help
+                else key
+            ): validator
+            for key, validator in self.slots.items()
+        }
+
+    def _said_halves(self, text: Any) -> tuple[time, time] | None:
+        """Both readings of a time said without morning or evening, with the option on."""
+        if self.manager.twelve_hour and (said := parse_twelve_hour(text)):
+            return both_halves(said)
+        return None
 
     @property
     def hass(self) -> HomeAssistant:
@@ -165,8 +216,9 @@ class _VoiceAlarmIntent(intent.IntentHandler):
             ids = {t.entity_id for t in matches}
             alarms = [a for a in alarms if a.target in ids]
         if time_text := self._slot(intent_obj, "time"):
-            at = parse_time(time_text)
-            alarms = [a for a in alarms if a.time == at]
+            # 'My alarm at 8' is the one at 08:00 or at 20:00.
+            wanted_times = self._said_halves(time_text) or (parse_time(time_text),)
+            alarms = [a for a in alarms if a.time in wanted_times]
         if name := self._slot(intent_obj, "name"):
             lowered = str(name).lower()
             exact = [a for a in alarms if (a.name or "").lower() == lowered]
@@ -177,6 +229,7 @@ class _VoiceAlarmIntent(intent.IntentHandler):
                     a
                     for a in alarms
                     if lowered in a.label.lower()
+                    or lowered in a.label_in(self._lang(intent_obj)).lower()
                     or (a.message and lowered in a.message.lower())
                     or (a.name and a.name.lower() in lowered)
                 ]
@@ -271,7 +324,8 @@ class SetAlarmIntent(_VoiceAlarmIntent):
         "aloud instead of an alarm sound. Rings on the satellite the user is talking to unless "
         "a target is named. The response says exactly what was created; repeat it to the user."
     )
-    slot_schema = {
+    twelve_hour_help = {"time": TIME_HELP_TWELVE_HOUR}
+    slots = {
         vol.Required("time", description=TIME_HELP): cv.string,
         vol.Optional("date", description=DATE_HELP): cv.string,
         vol.Optional("weekdays", description=WEEKDAYS_HELP): vol.Any(cv.string, [cv.string]),
@@ -292,12 +346,16 @@ class SetAlarmIntent(_VoiceAlarmIntent):
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
         lang = self._lang(intent_obj)
-        at = parse_time(self._slot(intent_obj, "time"))
+        time_text = self._slot(intent_obj, "time")
+        at = parse_time(time_text)
         weekdays = parse_weekdays(self._slot(intent_obj, "weekdays"))
         date_text = self._slot(intent_obj, "date")
         if weekdays and date_text:
             raise IntentFailed("err_date_and_weekdays")
         on_date = parse_date(date_text, now) if date_text else None
+        # 'Wake me at 8' means whichever 8 comes next, as long as no day pins it down.
+        if not weekdays and on_date is None and (halves := self._said_halves(time_text)):
+            at = sooner_half_day(halves[0], now)
         target = self._resolve_target(intent_obj, self._slot(intent_obj, "target"))
         message = self._slot(intent_obj, "message")
         duration_minutes = self._slot(intent_obj, "duration_minutes")
@@ -337,7 +395,7 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
         "rings on that day as a short list of times, e.g. for 'when will you wake me "
         "tomorrow?' or 'do I have an alarm on Friday?'."
     )
-    slot_schema = {
+    slots = {
         vol.Optional(
             "target", description="Only list alarms on this satellite (name/area)."
         ): cv.string,
@@ -483,7 +541,7 @@ class ListAlarmsIntent(_VoiceAlarmIntent):
                 "alarms": [
                     {
                         "alarm_id": alarm.id,
-                        "label": alarm.label,
+                        "label": alarm.label_in(lang),
                         "kind": alarm.kind,
                         "target": alarm.target,
                         "rings_at": at.isoformat(),
@@ -504,7 +562,8 @@ class DeleteAlarmIntent(_VoiceAlarmIntent):
         "every matching alarm, or every alarm when no filter is given. To silence a repeating "
         "alarm for one day use skip next instead. The response lists what was deleted."
     )
-    slot_schema = {
+    twelve_hour_help = {"time": TIME_FILTER_HELP_TWELVE_HOUR}
+    slots = {
         vol.Optional("alarm_id", description=ID_FILTER_HELP): cv.string,
         vol.Optional("name", description=NAME_FILTER_HELP): cv.string,
         vol.Optional("time", description=TIME_FILTER_HELP): cv.string,
@@ -555,7 +614,8 @@ class SkipNextIntent(_VoiceAlarmIntent):
         "alarms a few minutes apart count as one wake-up). Set all=true to skip every matching "
         "alarm, undo=true to reinstate skipped occurrences."
     )
-    slot_schema = {
+    twelve_hour_help = {"time": TIME_FILTER_HELP_TWELVE_HOUR}
+    slots = {
         vol.Optional("alarm_id", description=ID_FILTER_HELP): cv.string,
         vol.Optional("name", description=NAME_FILTER_HELP): cv.string,
         vol.Optional("time", description=TIME_FILTER_HELP): cv.string,
@@ -583,7 +643,12 @@ class SkipNextIntent(_VoiceAlarmIntent):
             if candidates and not on_day:
                 later = join_list(
                     [
-                        tr(lang, "rings_next", label=a.label, when=format_when(nxt, now, lang))
+                        tr(
+                            lang,
+                            "rings_next",
+                            label=a.label_in(lang),
+                            when=format_when(nxt, now, lang),
+                        )
                         for a in candidates
                         if (nxt := _next_ring(a, now)) is not None
                     ],
@@ -611,13 +676,13 @@ class SkipNextIntent(_VoiceAlarmIntent):
         where = self._where(alarm)
         if undo:
             if alarm.skipped_occurrence is None:
-                raise IntentFailed("err_no_skipped", label=alarm.label, where=where)
+                raise IntentFailed("err_no_skipped", label=alarm.label_in(lang), where=where)
             alarm, restored = await self.manager.async_skip_next(alarm.id, undo=True)
             nxt = alarm.next_pending(now)
             text = tr(
                 lang,
                 "reinstated",
-                label=alarm.label,
+                label=alarm.label_in(lang),
                 where=where,
                 when=f" {format_when(restored, now, lang)}" if restored else "",
             )
@@ -633,13 +698,13 @@ class SkipNextIntent(_VoiceAlarmIntent):
                 {"alarm_id": alarm.id, "next": nxt.isoformat() if nxt else None}
             )
             return
-        after = max(now, alarm.pending_after())
+        after = alarm.upcoming_after(now)
         scheduled = alarm.next_scheduled(after)
         if scheduled is not None and alarm.skipped_occurrence == scheduled:
             nxt = alarm.next_pending(now)
             raise IntentFailed(
                 "err_already_skipped",
-                label=alarm.label,
+                label=alarm.label_in(lang),
                 where=where,
                 when=format_when(scheduled, now, lang),
                 next=tr(
@@ -656,7 +721,7 @@ class SkipNextIntent(_VoiceAlarmIntent):
         text = tr(
             lang,
             "skipping",
-            label=alarm.label,
+            label=alarm.label_in(lang),
             where=where,
             when=f" {format_when(skipped, now, lang)}" if skipped else "",
         )
@@ -745,7 +810,11 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
         + " Set all=true to change every matching alarm, or every alarm when no filter is "
         "given (e.g. 'disable all my alarms'). The response says exactly what changed."
     )
-    slot_schema = {
+    twelve_hour_help = {
+        "time": TIME_FILTER_HELP_TWELVE_HOUR,
+        "new_time": NEW_TIME_HELP_TWELVE_HOUR,
+    }
+    slots = {
         vol.Optional("alarm_id", description=ID_FILTER_HELP): cv.string,
         vol.Optional("name", description="Current name (to find the alarm)."): cv.string,
         vol.Optional("time", description="Current time (to find the alarm), HH:MM."): cv.string,
@@ -788,9 +857,11 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
             alarms = [self._pick_one(intent_obj, candidates, "verb_change")]
         changes: dict[str, Any] = {}
         described: list[str] = []
+        new_halves = None
         if new_time := self._slot(intent_obj, "new_time"):
             changes["time"] = parse_time(new_time)
-            described.append(tr(lang, "change_time", time=changes["time"].strftime("%H:%M")))
+            new_halves = self._said_halves(new_time)
+            described.append("")  # the time, once it is known for each alarm
         if (new_weekdays := self._slot(intent_obj, "new_weekdays")) is not None:
             if isinstance(new_weekdays, str) and new_weekdays.lower() in _ONCE_WORDS:
                 changes["weekdays"] = []
@@ -827,7 +898,19 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
             # A new date turns a repeating alarm into a one-time one unless days were given too.
             if "date" in alarm_changes and "weekdays" not in alarm_changes and alarm.is_recurring:
                 alarm_changes["weekdays"] = []
+            # 'Move it to 8' moves a one-time alarm to whichever 8 comes next, as when it is set.
+            if (
+                new_halves
+                and "date" not in alarm_changes
+                and not alarm_changes.get("weekdays", alarm.weekdays)
+            ):
+                alarm_changes["time"] = sooner_half_day(new_halves[0], now)
             updates.append((alarm.id, alarm_changes))
+        if "time" in changes:
+            times = sorted({c["time"] for _, c in updates})
+            described[0] = tr(
+                lang, "change_time", time=join_list([format_clock(t, lang) for t in times], lang)
+            )
         # All or nothing: one invalid change must not leave the others half done.
         updated = await self.manager.async_update_alarms(updates)
         descriptions = [
@@ -865,7 +948,7 @@ class DismissIntent(_VoiceAlarmIntent):
         "snoozing it. Use for 'stop', 'dismiss the alarm', 'snooze 10 minutes'. Defaults to the "
         "satellite the user is talking to, otherwise whatever is ringing."
     )
-    slot_schema = {
+    slots = {
         vol.Optional("target", description="Satellite whose alarm to stop (name/area)."): cv.string,
         vol.Optional(
             "snooze_minutes",
@@ -920,7 +1003,7 @@ class DismissIntent(_VoiceAlarmIntent):
                     tr(
                         lang,
                         "snooze_at",
-                        time=dt_util.as_local(nxt).strftime("%H:%M"),
+                        time=format_clock(dt_util.as_local(nxt).time(), lang, "at"),
                         relative=format_relative(nxt, now, lang),
                     )
                     if nxt
@@ -948,7 +1031,20 @@ class DismissIntent(_VoiceAlarmIntent):
         response.async_set_speech_slots({"stopped": [s.target.entity_id for s in sessions]})
 
 
-_ONCE_WORDS = ("none", "never", "once", "one-time", "one time", "nie", "einmal", "einmalig")
+_ONCE_WORDS = (
+    "none",
+    "never",
+    "once",
+    "one-time",
+    "one time",
+    "nie",
+    "einmal",
+    "einmalig",
+    "nunca",
+    "uma vez",
+    "uma vez só",
+    "só uma vez",
+)
 
 
 def _repeats(alarm: Alarm, lang: str) -> str:
@@ -960,7 +1056,7 @@ def _describe_session(session: RingSession, lang: str) -> str:
         lang,
         "session",
         kind=tr(lang, f"the_{session.kind}"),
-        label=session.label,
+        label=session.alarms[0].label_in(lang) if session.alarms else session.label,
         target=session.target.display,
         state=tr(lang, "paused") if session.state == STATE_PAUSED else "",
     )
@@ -971,7 +1067,7 @@ def _alarm_summary(alarm: Alarm, now: datetime, lang: str) -> dict[str, Any]:
     nxt = alarm.next_pending(now)
     return {
         "alarm_id": alarm.id,
-        "label": alarm.label,
+        "label": alarm.label_in(lang),
         "kind": alarm.kind,
         "target": alarm.target,
         "time": alarm.time.strftime("%H:%M"),
@@ -984,7 +1080,7 @@ def _alarm_summary(alarm: Alarm, now: datetime, lang: str) -> dict[str, Any]:
 
 def _next_ring(alarm: Alarm, now: datetime) -> datetime | None:
     """The alarm's very next scheduled ring, skipped or not."""
-    return alarm.next_scheduled(max(now, alarm.pending_after()))
+    return alarm.next_scheduled(alarm.upcoming_after(now))
 
 
 def _next_ring_day(alarm: Alarm, now: datetime) -> date:

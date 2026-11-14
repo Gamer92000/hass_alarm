@@ -13,7 +13,11 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.components import media_source, tts
-from homeassistant.components.assist_pipeline import async_get_pipeline, async_get_pipelines
+from homeassistant.components.assist_pipeline import (
+    Pipeline,
+    async_get_pipeline,
+    async_get_pipelines,
+)
 from homeassistant.components.assist_satellite import DOMAIN as ASSIST_SATELLITE_DOMAIN
 from homeassistant.components.assist_satellite.const import (
     DATA_COMPONENT as SATELLITE_COMPONENT,
@@ -56,7 +60,7 @@ from .const import (
     SUPERSEDE_TIMEOUT,
 )
 from .http import StreamRegistry, StreamSpec
-from .i18n import default_language, tr
+from .i18n import default_language, normalize_language, tr
 from .models import Alarm
 from .targets import Target
 
@@ -121,6 +125,8 @@ class RingSession:
         self.state = STATE_RINGING
         self.dismissed = False
         self.dismissed_by: str | None = None
+        # Ended because playback kept failing (as on a satellite gone offline).
+        self.gave_up = False
         self.finished_at: datetime | None = None
         self.context = Context()
 
@@ -355,6 +361,7 @@ class RingSession:
                         _LOGGER.error(
                             "Giving up ringing %s: playback keeps failing", self.target.entity_id
                         )
+                        self.gave_up = True
                         break
                     await self._sleep(ANNOUNCE_RETRY_SECONDS)
                     elapsed += ANNOUNCE_RETRY_SECONDS
@@ -415,6 +422,7 @@ class RingSession:
                     _LOGGER.error(
                         "Giving up ringing %s: playback keeps failing", self.target.entity_id
                     )
+                    self.gave_up = True
                     break
                 _LOGGER.debug(
                     "Retrying alarm playback on %s (%s)", self.target.entity_id, spec.error
@@ -456,7 +464,7 @@ class RingSession:
                 attempt = 0
             attempt += 1
             # Read on every repeat: reminders that joined add to the message.
-            spoken = tr(default_language(), "spoken_reminder", text=self.message or self.label)
+            spoken = tr(self._spoken_language(), "spoken_reminder", text=self.message or self.label)
             try:
                 if not self._via_player:
                     started = time.monotonic()
@@ -481,8 +489,8 @@ class RingSession:
 
     # ------------------------------------------------------------------ audio
 
-    async def _speech_url(self, text: str) -> str:
-        """Synthesize text with the satellite's pipeline voice, as its announce would."""
+    def _pipeline(self) -> Pipeline:
+        """The satellite's selected pipeline, else the preferred one."""
         satellite = self.hass.data[SATELLITE_COMPONENT].get_entity(self.target.entity_id)
         pipeline_id = None
         if satellite is not None and satellite.pipeline_entity_id:
@@ -492,7 +500,18 @@ class RingSession:
                     (p.id for p in async_get_pipelines(self.hass) if p.name == selected.state),
                     None,
                 )
-        pipeline = async_get_pipeline(self.hass, pipeline_id)
+        return async_get_pipeline(self.hass, pipeline_id)
+
+    def _spoken_language(self) -> str:
+        """The language the satellite's voice speaks, else the instance language."""
+        pipeline = self._pipeline()
+        language = pipeline.tts_language or pipeline.language
+        return normalize_language(language) if language else default_language()
+
+    async def _speech_url(self, text: str) -> str:
+        """Synthesize text with the satellite's pipeline voice, as its announce would."""
+        satellite = self.hass.data[SATELLITE_COMPONENT].get_entity(self.target.entity_id)
+        pipeline = self._pipeline()
         options: dict[str, Any] = {}
         if pipeline.tts_voice is not None:
             options[tts.ATTR_VOICE] = pipeline.tts_voice

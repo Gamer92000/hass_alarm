@@ -13,14 +13,28 @@ from homeassistant.components.media_source import is_media_source_id
 from homeassistant.util import dt as dt_util
 
 from .const import KIND_ALARM, KIND_REMINDER, KINDS, WEEKDAY_CODES
-from .i18n import WEEKDAYS, LocalizedError, default_language, tr
+from .i18n import WEEKDAYS, LocalizedError, default_language, format_clock, tr
 
+# '7:30', '19.30', '7 pm', '8 Uhr', and as written in Portuguese: 'às 8', '8 horas', '7h30',
+# '1h38min', '8 da noite'.
 _TIME_RE = re.compile(
-    r"^\s*(?P<h>\d{1,2})(?:[:.h](?P<m>\d{2}))?\s*(?:uhr)?\s*(?P<ampm>[ap]\.?m\.?)?\s*$",
+    r"^\s*(?:às?\s+|as\s+)?(?P<h>\d{1,2})"
+    r"(?:[:.h](?P<m>\d{2})\s*(?:min(?:utos?)?|uhr)?|\s*(?:uhr|horas?|h))?"
+    r"\s*(?P<ampm>[ap]\.?m\.?|da (?:manhã|madrugada|tarde|noite))?\s*$",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"^\s*(?P<y>\d{4})-(?P<m>\d{1,2})-(?P<d>\d{1,2})\s*$")
-_REL_RE = re.compile(r"^\s*\+\s*(?P<n>\d+)\s*(?:d|days?|tage?)?\s*$", re.IGNORECASE)
+_REL_RE = re.compile(r"^\s*\+\s*(?P<n>\d+)\s*(?:d|days?|tage?|dias?)?\s*$", re.IGNORECASE)
+# 'segunda-feira', 'segunda feira' and 'segundas-feiras' all reduce to the short form.
+_FEIRA_RE = re.compile(r"[\s-]+feiras?\b")
+
+_PERIODS = {"da manhã": "am", "da madrugada": "am", "da tarde": "pm", "da noite": "pm"}
+_NAMED_TIMES = {
+    "meio-dia": time(12, 0),
+    "meio dia": time(12, 0),
+    "meia-noite": time(0, 0),
+    "meia noite": time(0, 0),
+}
 
 # Words the parsers accept in any supported language (the LLM is told to pass English
 # or ISO forms, but a German conversation may well hand over 'morgen' or 'montags').
@@ -44,6 +58,28 @@ _WEEKDAY_ALIASES.update(
         "sa": 5,
         "so": 6,
         "sonnabend": 5,
+        "segunda": 0,
+        "terça": 1,
+        "terca": 1,
+        "quarta": 2,
+        "quinta": 3,
+        "sexta": 4,
+        "sabado": 5,
+        "segundas": 0,
+        "terças": 1,
+        "tercas": 1,
+        "quartas": 2,
+        "quintas": 3,
+        "sextas": 4,
+        "sabados": 5,
+        "seg": 0,
+        "ter": 1,
+        "qua": 2,
+        "qui": 3,
+        "sex": 4,
+        "sáb": 5,
+        "sab": 5,
+        "dom": 6,
     }
 )
 
@@ -68,13 +104,66 @@ _WEEKDAY_GROUPS: dict[str, list[int]] = {
     "wochenende": [5, 6],
     "am wochenende": [5, 6],
     "wochenenden": [5, 6],
+    # Portuguese
+    "todos os dias": _EVERY_DAY,
+    "todo dia": _EVERY_DAY,
+    "diariamente": _EVERY_DAY,
+    "todos": _EVERY_DAY,
+    "dias úteis": [0, 1, 2, 3, 4],
+    "dias uteis": [0, 1, 2, 3, 4],
+    "nos dias úteis": [0, 1, 2, 3, 4],
+    "nos dias uteis": [0, 1, 2, 3, 4],
+    "dias de semana": [0, 1, 2, 3, 4],
+    "durante a semana": [0, 1, 2, 3, 4],
+    "de segunda a sexta": [0, 1, 2, 3, 4],
+    "fim de semana": [5, 6],
+    "fins de semana": [5, 6],
+    "final de semana": [5, 6],
+    "finais de semana": [5, 6],
+    "no fim de semana": [5, 6],
+    "nos fins de semana": [5, 6],
+    "no final de semana": [5, 6],
+    "nos finais de semana": [5, 6],
 }
 
-_TODAY_WORDS = ("today", "now", "heute", "jetzt")
-_TOMORROW_WORDS = ("tomorrow", "morgen")
-_DAY_AFTER_WORDS = ("day after tomorrow", "overmorrow", "übermorgen")
-_NEXT_PREFIXES = ("next ", "nächsten ", "nächster ", "nächste ", "kommenden ", "kommender ")
-_THIS_PREFIXES = ("this ", "diesen ", "dieser ", "am ", "on ")
+_TODAY_WORDS = ("today", "now", "heute", "jetzt", "hoje", "agora")
+_TOMORROW_WORDS = ("tomorrow", "morgen", "amanhã", "amanha")
+_DAY_AFTER_WORDS = (
+    "day after tomorrow",
+    "overmorrow",
+    "übermorgen",
+    "depois de amanhã",
+    "depois de amanha",
+)
+_NEXT_PREFIXES = (
+    "next ",
+    "nächsten ",
+    "nächster ",
+    "nächste ",
+    "kommenden ",
+    "kommender ",
+    "na próxima ",
+    "na proxima ",
+    "no próximo ",
+    "no proximo ",
+    "próxima ",
+    "proxima ",
+    "próximo ",
+    "proximo ",
+)
+_THIS_PREFIXES = (
+    "this ",
+    "diesen ",
+    "dieser ",
+    "am ",
+    "on ",
+    "nesta ",
+    "neste ",
+    "esta ",
+    "este ",
+    "na ",
+    "no ",
+)
 
 
 class ParseError(LocalizedError, ValueError):
@@ -91,18 +180,22 @@ def is_valid_sound(sound: str) -> bool:
 
 
 def parse_time(value: Any) -> time:
-    """Parse a time given as 'HH:MM', 'H:MM', '7am', '7:30 pm' or a time object."""
+    """Parse a time given as 'HH:MM', 'H:MM', '7am', '7:30 pm', '7h30' or a time object."""
     if isinstance(value, datetime):
         return value.time().replace(second=0, microsecond=0)
     if isinstance(value, time):
         return value.replace(second=0, microsecond=0)
     text = str(value)
+    named = re.sub(r"^(?:ao|à|a)\s+", "", text.strip().lower())
+    if named in _NAMED_TIMES:
+        return _NAMED_TIMES[named]
     match = _TIME_RE.match(text)
     if not match:
         raise ParseError("err_time_format", text=text)
     hour = int(match.group("h"))
     minute = int(match.group("m") or 0)
     ampm = (match.group("ampm") or "").lower().replace(".", "")
+    ampm = _PERIODS.get(ampm, ampm)
     if ampm:
         if hour < 1 or hour > 12:
             raise ParseError("err_time_invalid", text=text)
@@ -115,17 +208,49 @@ def parse_time(value: Any) -> time:
     return time(hour=hour, minute=minute)
 
 
+def parse_twelve_hour(value: Any) -> time | None:
+    """Return a time said on a 12-hour clock without morning or evening ('8', '10:30', 'às 7h30').
+
+    Such a time could be morning or evening. One with am or pm, with a leading zero ('08:00')
+    or with an hour past 12 ('20') is not.
+    """
+    if not isinstance(value, str) or not (match := _TIME_RE.match(value)) or match.group("ampm"):
+        return None
+    hour = match.group("h")
+    minute = int(match.group("m") or 0)
+    if hour.startswith("0") or not 1 <= int(hour) <= 12 or minute > 59:
+        return None
+    return time(int(hour), minute)
+
+
+def both_halves(at: time) -> tuple[time, time]:
+    """``at`` read on a 12-hour clock: in the morning and in the evening (12 gives 00 and 12)."""
+    morning = time(at.hour % 12, at.minute)
+    return morning, morning.replace(hour=morning.hour + 12)
+
+
+def sooner_half_day(at: time, now: datetime) -> time:
+    """Of ``at`` in the morning and in the evening, the one the local clock reaches first."""
+    local = now.astimezone(dt_util.get_default_time_zone()).time()
+    candidates = both_halves(at)
+    return next((candidate for candidate in candidates if candidate > local), candidates[0])
+
+
 def parse_weekdays(value: Any) -> list[int]:
     """Parse weekdays from a list or string of codes, names, ints or group words."""
     if value is None:
         return []
     if isinstance(value, str):
-        lowered = value.strip().lower()
+        lowered = _FEIRA_RE.sub("", value.strip().lower())
         if not lowered:
             return []
         if lowered in _WEEKDAY_GROUPS:
             return list(_WEEKDAY_GROUPS[lowered])
-        parts: list[Any] = [p for p in re.split(r"[,\s/;]+|\band\b|\bund\b", lowered) if p]
+        parts: list[Any] = [
+            p
+            for p in re.split(r"[,\s/;]+|\band\b|\bund\b|\b(?:e|às|as|aos|nas|nos)\b", lowered)
+            if p
+        ]
     else:
         parts = list(value)
     result: set[int] = set()
@@ -137,7 +262,7 @@ def parse_weekdays(value: Any) -> list[int]:
                 result.add(part)
                 continue
             raise ParseError("err_weekday_int", text=part)
-        text = str(part).strip().lower().rstrip(".")
+        text = _FEIRA_RE.sub("", str(part).strip().lower()).rstrip(".")
         if not text:
             continue
         if text in _WEEKDAY_GROUPS:
@@ -171,7 +296,7 @@ def parse_date(value: Any, now: datetime) -> date:
             return date(int(match.group("y")), int(match.group("m")), int(match.group("d")))
         except ValueError as err:
             raise ParseError("err_date_invalid", text=value) from err
-    stripped = text
+    stripped = _FEIRA_RE.sub("", text)
     is_next = False
     for prefix in _NEXT_PREFIXES + _THIS_PREFIXES:
         if stripped.startswith(prefix):
@@ -210,6 +335,8 @@ class Alarm:
     skipped_occurrence: datetime | None = None
     last_fired: datetime | None = None
     created: datetime = field(default_factory=dt_util.utcnow)
+    # Not stored: a due occurrence waiting for its offline satellite (set by the manager).
+    waiting: datetime | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
         """Normalise fields."""
@@ -239,12 +366,19 @@ class Alarm:
     @property
     def label(self) -> str:
         """Short human label ('Alarm 07:00' in the instance language when unnamed)."""
+        return self._label(default_language(), self.time.strftime("%H:%M"))
+
+    def label_in(self, language: str) -> str:
+        """The label as said in ``language`` ('Alarme das sete horas' when unnamed)."""
+        return self._label(language, format_clock(self.time, language, "of"))
+
+    def _label(self, language: str, clock: str) -> str:
         if self.name:
             return self.name
         if self.is_reminder and self.message:
             return self.message
-        kind = tr(default_language(), "label_reminder" if self.is_reminder else "label_alarm")
-        return f"{kind} {self.time.strftime('%H:%M')}"
+        kind = tr(language, "label_reminder" if self.is_reminder else "label_alarm")
+        return f"{kind} {clock}"
 
     # ---- occurrence computation --------------------------------------------
 
@@ -288,17 +422,28 @@ class Alarm:
             return self.last_fired
         return self.created
 
+    def upcoming_after(self, now: datetime) -> datetime:
+        """Reference point for the next occurrence to show or skip.
+
+        Occurrences after now, unless one is due but waits for its satellite: that one
+        comes next.
+        """
+        pending_after = self.pending_after()
+        if self.waiting is not None and self.waiting > pending_after:
+            return pending_after
+        return max(now, pending_after)
+
     def next_pending(self, now: datetime) -> datetime | None:
         """Return the next occurrence that still has to fire (>= now context)."""
         if not self.enabled:
             return None
-        return self.next_occurrence(max(now, self.pending_after()))
+        return self.next_occurrence(self.upcoming_after(now))
 
     def occurrence_on(self, day: date, now: datetime) -> datetime | None:
         """Return the still-pending occurrence on the local ``day``, ignoring skips."""
         start = combine_local(day, time(0, 0))
         end = combine_local(day + timedelta(days=1), time(0, 0))
-        after = max(now, self.pending_after(), start - timedelta(microseconds=1))
+        after = max(self.upcoming_after(now), start - timedelta(microseconds=1))
         at = self.next_scheduled(after)
         if at is None or at >= end:
             return None
@@ -350,7 +495,7 @@ class Alarm:
     def public_dict(self, now: datetime | None = None) -> dict[str, Any]:
         """Serialise for the frontend / service responses with computed fields."""
         now = now or dt_util.utcnow()
-        after = max(now, self.pending_after())
+        after = self.upcoming_after(now)
         nxt = self.next_occurrence(after) if self.enabled else None
         scheduled = self.next_scheduled(after) if self.enabled else None
         data = self.to_dict()

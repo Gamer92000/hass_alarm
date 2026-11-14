@@ -1,6 +1,6 @@
 """Human readable descriptions of alarms for voice responses.
 
-Every function takes the language of the conversation (``"en"`` or ``"de"``); the
+Every function takes the language of the conversation (``"en"``, ``"de"`` or ``"pt"``); the
 wording comes from the tables in ``i18n.py``.
 """
 
@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 
 from homeassistant.util import dt as dt_util
 
-from .i18n import DEFAULT_LANGUAGE, MONTHS, WEEKDAYS, tr
+from .i18n import DEFAULT_LANGUAGE, MONTHS, RECURRING_WEEKDAYS, WEEKDAYS, format_clock, tr
 from .models import Alarm
 from .targets import Target
 
@@ -29,6 +29,13 @@ def weekday_name(weekday: int, language: str = DEFAULT_LANGUAGE) -> str:
     return (WEEKDAYS.get(language) or WEEKDAYS[DEFAULT_LANGUAGE])[weekday]
 
 
+def recurring_weekday_name(weekday: int, language: str = DEFAULT_LANGUAGE) -> str:
+    """Weekday in a repeating schedule ('Monday', or 'às segundas' in Portuguese)."""
+    if names := RECURRING_WEEKDAYS.get(language):
+        return names[weekday]
+    return weekday_name(weekday, language)
+
+
 def format_days(weekdays: list[int], language: str = DEFAULT_LANGUAGE) -> str:
     """Describe a weekday set."""
     days = sorted(set(weekdays))
@@ -38,7 +45,7 @@ def format_days(weekdays: list[int], language: str = DEFAULT_LANGUAGE) -> str:
         return tr(language, "days_weekdays")
     if days == [5, 6]:
         return tr(language, "days_weekends")
-    names = [weekday_name(d, language) for d in days]
+    names = [recurring_weekday_name(d, language) for d in days]
     return tr(language, "days_every", days=join_list(names, language))
 
 
@@ -49,12 +56,15 @@ def _unit(n: int, unit: str, language: str) -> str:
 def format_relative(
     target: datetime, now: datetime | None = None, language: str = DEFAULT_LANGUAGE
 ) -> str:
-    """Return 'in 2 hours and 5 minutes' style text."""
+    """Return 'in 2 hours and 5 minutes' style text.
+
+    A next ring already due is one waiting for its satellite to come back.
+    """
     now = now or dt_util.utcnow()
     delta = target - now
     seconds = int(delta.total_seconds())
     if seconds < 0:
-        return tr(language, "rel_past")
+        return tr(language, "rel_waiting")
     if seconds < 60:
         return tr(language, "rel_under_minute")
     minutes, _ = divmod(seconds, 60)
@@ -108,7 +118,7 @@ def format_when(
         language,
         "when_at",
         day=format_day(local.date(), now, language),
-        time=local.strftime("%H:%M"),
+        time=format_clock(local.time(), language, "at"),
     )
 
 
@@ -121,7 +131,7 @@ def format_duration(seconds: int, language: str = DEFAULT_LANGUAGE) -> str:
 
 def describe_schedule(alarm: Alarm, language: str = DEFAULT_LANGUAGE) -> str:
     """Describe when an alarm is scheduled: '06:30 on weekdays' / '18:00 on ...'."""
-    clock = alarm.time.strftime("%H:%M")
+    clock = format_clock(alarm.time, language, "at")
     if alarm.is_recurring:
         return tr(
             language, "schedule_recurring", time=clock, days=format_days(alarm.weekdays, language)
@@ -143,21 +153,26 @@ def describe_alarm(
     now = now or dt_util.utcnow()
     kind = "reminder" if alarm.is_reminder else "alarm"
     kind_text = tr(language, f"kind_{kind}_{'repeating' if alarm.is_recurring else 'once'}")
-    text = tr(
-        language,
-        "alarm_desc",
-        kind=kind_text,
-        label=alarm.label,
-        schedule=describe_schedule(alarm, language),
-    )
-    if alarm.is_reminder and alarm.message and alarm.message != alarm.label:
+    schedule = describe_schedule(alarm, language)
+    if alarm.name or (alarm.is_reminder and alarm.message):
+        text = tr(
+            language,
+            "alarm_desc",
+            kind=kind_text,
+            label=alarm.label_in(language),
+            schedule=schedule,
+        )
+    else:
+        # 'Alarm 07:00 at 07:00' says the time twice.
+        text = tr(language, "alarm_desc_unnamed", kind=kind_text, schedule=schedule)
+    if alarm.is_reminder and alarm.message and alarm.message != alarm.label_in(language):
         text += tr(language, "alarm_desc_saying", message=alarm.message)
     where = target.display if target else alarm.target
     text += tr(language, "alarm_desc_on", where=where)
     if not alarm.enabled:
         return text + tr(language, "alarm_desc_disabled")
     if with_next:
-        after = max(now, alarm.pending_after())
+        after = alarm.upcoming_after(now)
         nxt = alarm.next_occurrence(after)
         scheduled = alarm.next_scheduled(after)
         if (
@@ -182,10 +197,16 @@ def describe_briefly(
     alarm: Alarm, at: datetime, *, skipped: bool = False, language: str = DEFAULT_LANGUAGE
 ) -> str:
     """Describe one ring in a day listing: '08:45', '08:45 (work)', 'a reminder 'x' at 17:00'."""
-    clock = dt_util.as_local(at).strftime("%H:%M")
+    local = dt_util.as_local(at).time()
+    clock = format_clock(local, language)
     notes: list[str] = []
     if alarm.is_reminder:
-        text = tr(language, "brief_reminder", label=alarm.label, time=clock)
+        text = tr(
+            language,
+            "brief_reminder",
+            label=alarm.label_in(language),
+            time=format_clock(local, language, "at"),
+        )
     else:
         text = clock
         if alarm.name:

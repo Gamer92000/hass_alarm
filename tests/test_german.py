@@ -38,6 +38,7 @@ from custom_components.voice_alarms.speech import (
     format_relative,
     format_when,
 )
+from homeassistant.components.assist_pipeline import async_get_pipeline, async_update_pipeline
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
 from homeassistant.util import dt as dt_util
@@ -133,7 +134,9 @@ def test_format_relative_german() -> None:
         "in 2 Tagen und 3 Stunden"
     )
     assert format_relative(START + timedelta(days=1), START, "de") == "in 1 Tag"
-    assert format_relative(START - timedelta(seconds=1), START, "de") == "in der Vergangenheit"
+    assert format_relative(START - timedelta(seconds=1), START, "de") == (
+        "sobald der Satellit wieder da ist"
+    )
     assert format_relative(START + timedelta(seconds=30), START, "de") == (
         "in weniger als einer Minute"
     )
@@ -319,7 +322,7 @@ async def test_unknown_language_falls_back_to_english(
     response = await handle(
         hass, INTENT_SET, satellites["kitchen"]["device_id"], language="fr", time="07:00"
     )
-    assert speech(response).startswith("Created one-time alarm 'Alarm 07:00' at 07:00")
+    assert speech(response).startswith("Created one-time alarm at 07:00")
 
 
 # ----------------------------------------------------------- instance language
@@ -347,7 +350,8 @@ async def test_instance_language_follows_core_config(hass: HomeAssistant, ready)
 async def test_reminder_spoken_in_german(
     hass: HomeAssistant, ready, satellites, announce_calls
 ) -> None:
-    set_default_language("de")
+    # The satellite speaks in its pipeline's language, whatever the instance language is.
+    await async_update_pipeline(hass, async_get_pipeline(hass), language="de", tts_language="de_DE")
     target = ready.target(satellites["kitchen"]["satellite"])
     session = await ready.async_ring(
         target, kind=KIND_REMINDER, message="Müll rausbringen", label="Test", origin="test"

@@ -14,6 +14,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.core import callback
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -31,6 +32,7 @@ from .const import (
     CONF_RAMP_START,
     CONF_REMINDER_INTERVAL,
     CONF_REMINDER_REPEATS,
+    CONF_TWELVE_HOUR,
     DEFAULT_DEVICE_STOP_PAUSE,
     DEFAULT_DURATION,
     DEFAULT_MISSED_GRACE,
@@ -38,6 +40,7 @@ from .const import (
     DEFAULT_RAMP_START,
     DEFAULT_REMINDER_INTERVAL,
     DEFAULT_REMINDER_REPEATS,
+    DEFAULT_TWELVE_HOUR,
     DOMAIN,
 )
 from .models import is_valid_sound
@@ -71,6 +74,7 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Optional(CONF_DEVICE_STOP_PAUSE, default=DEFAULT_DEVICE_STOP_PAUSE): _number(
             0, 900, 5, "s"
         ),
+        vol.Optional(CONF_TWELVE_HOUR, default=DEFAULT_TWELVE_HOUR): BooleanSelector(),
     }
 )
 
