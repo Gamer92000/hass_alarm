@@ -70,7 +70,7 @@ automatically. No extra configuration is needed. Examples:
 | You say | What happens |
 | --- | --- |
 | "Wake me at 6:30" | One-time alarm on this satellite, tomorrow (or today if still ahead). |
-| "Wake me at 8" / "Wake me at 7:30" | At 08:00 or 20:00 (07:30 or 19:30), whichever comes first. A day ("tomorrow at 8") or repeat days keep the morning. |
+| "Wake me at 8" | At 08:00, tomorrow or today. With the option *time without morning or evening*, at 08:00 or 20:00, whichever comes first. |
 | "Set an alarm for 7 on weekdays called work" | Repeating alarm Mon–Fri. |
 | "Set an alarm for 8 tomorrow in the bedroom" | Target another satellite by name or area. |
 | "Remind me at 5 pm to call mom" | Spoken reminder. |
@@ -137,6 +137,7 @@ interrupted by anything that is due.
 | Reminder repeats / pause | 3 × 60 s | How often and how spaced a reminder is spoken. |
 | Missed alarm grace | 600 s | An alarm that was missed by less than this (restart, downtime, satellite offline) still rings. With 0, only alarms on time ring. |
 | Resume ringing after device stop | 0 s | 0 = a stop on the device dismisses the alarm; otherwise the alarm pauses that many seconds and rings again. |
+| Time without morning or evening | off | Off: "at 8" is 08:00. On: a time from 1 to 12 o'clock said without morning, evening, am or pm ("at 8", "at 10:30", "um 8 Uhr", "às 7h30") rings at whichever of the morning and the evening time comes first, so "wake me at 8" said at 10:00 rings at 20:00. A day ("tomorrow at 8") or repeat days keep the morning, and so does a time with a leading zero ("08:00"). The same holds for moving an alarm to a new time, and "my alarm at 8" finds the alarm at 08:00 and the one at 20:00. |
 
 ## Services
 

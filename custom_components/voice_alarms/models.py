@@ -15,19 +15,12 @@ from homeassistant.util import dt as dt_util
 from .const import KIND_ALARM, KIND_REMINDER, KINDS, WEEKDAY_CODES
 from .i18n import WEEKDAYS, LocalizedError, default_language, tr
 
+# '7:30', '19.30', '7 pm', '8 Uhr', and as written in Portuguese: 'às 8', '8 horas', '7h30',
+# '1h38min'.
 _TIME_RE = re.compile(
-    r"^\s*(?P<h>\d{1,2})(?:[:.h](?P<m>\d{2}))?\s*(?:uhr)?\s*(?P<ampm>[ap]\.?m\.?)?\s*$",
-    re.IGNORECASE,
-)
-# A time as said on a 12-hour clock: '8', '8 horas', '7h30', '1h38min', '7:30'. A leading
-# zero ('08:00') or a two-digit hour with a colon ('10:30') is 24-hour HH:MM, as the LLM
-# passes it.
-_TWELVE_HOUR_RE = re.compile(
-    r"^\s*(?:às?\s+|as\s+)?(?:"
-    r"(?P<h>[1-9]|1[0-2])\s*(?:uhr|h|horas?)?"
-    r"|(?P<hm>[1-9]|1[0-2])h(?P<m>\d{2})\s*(?:min(?:utos?)?|m)?"
-    r"|(?P<hc>[1-9])[:.](?P<mc>\d{2})"
-    r")\s*$",
+    r"^\s*(?:às?\s+|as\s+)?(?P<h>\d{1,2})"
+    r"(?:[:.h](?P<m>\d{2})\s*(?:min(?:utos?)?|uhr)?|\s*(?:uhr|horas?|h))?"
+    r"\s*(?P<ampm>[ap]\.?m\.?)?\s*$",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"^\s*(?P<y>\d{4})-(?P<m>\d{1,2})-(?P<d>\d{1,2})\s*$")
@@ -102,7 +95,7 @@ def is_valid_sound(sound: str) -> bool:
 
 
 def parse_time(value: Any) -> time:
-    """Parse a time given as 'HH:MM', 'H:MM', '7am', '7:30 pm' or a time object."""
+    """Parse a time given as 'HH:MM', 'H:MM', '7am', '7:30 pm', '7h30' or a time object."""
     if isinstance(value, datetime):
         return value.time().replace(second=0, microsecond=0)
     if isinstance(value, time):
@@ -127,24 +120,30 @@ def parse_time(value: Any) -> time:
 
 
 def parse_twelve_hour(value: Any) -> time | None:
-    """Return a time said on a 12-hour clock without morning or evening ('8', 'às 7h30').
+    """Return a time said on a 12-hour clock without morning or evening ('8', '10:30', 'às 7h30').
 
-    Such a time could be morning or evening; '08:00', '10:30', '8 am' and '20' are not.
+    Such a time could be morning or evening. One with am or pm, with a leading zero ('08:00')
+    or with an hour past 12 ('20') is not.
     """
-    if not isinstance(value, str) or not (match := _TWELVE_HOUR_RE.match(value)):
+    if not isinstance(value, str) or not (match := _TIME_RE.match(value)) or match.group("ampm"):
         return None
-    hour = match.group("h") or match.group("hm") or match.group("hc")
-    minute = match.group("m") or match.group("mc") or 0
-    if int(minute) > 59:
+    hour = match.group("h")
+    minute = int(match.group("m") or 0)
+    if hour.startswith("0") or not 1 <= int(hour) <= 12 or minute > 59:
         return None
-    return time(int(hour), int(minute))
+    return time(int(hour), minute)
+
+
+def both_halves(at: time) -> tuple[time, time]:
+    """``at`` read on a 12-hour clock: in the morning and in the evening (12 gives 00 and 12)."""
+    morning = time(at.hour % 12, at.minute)
+    return morning, morning.replace(hour=morning.hour + 12)
 
 
 def sooner_half_day(at: time, now: datetime) -> time:
     """Of ``at`` in the morning and in the evening, the one the local clock reaches first."""
     local = now.astimezone(dt_util.get_default_time_zone()).time()
-    morning = time(at.hour % 12, at.minute)
-    candidates = (morning, morning.replace(hour=morning.hour + 12))
+    candidates = both_halves(at)
     return next((candidate for candidate in candidates if candidate > local), candidates[0])
 
 
