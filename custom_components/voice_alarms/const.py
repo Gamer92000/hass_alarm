@@ -29,6 +29,9 @@ CONF_REMINDER_REPEATS: Final = "reminder_repeats"
 CONF_REMINDER_INTERVAL: Final = "reminder_interval"  # seconds
 CONF_MISSED_GRACE: Final = "missed_grace"  # seconds
 CONF_DEVICE_STOP_PAUSE: Final = "device_stop_pause"  # seconds, 0 = dismiss
+# A time said without morning or evening ("at 8") rings at whichever of 08:00 and 20:00
+# comes first.
+CONF_TWELVE_HOUR: Final = "twelve_hour"
 
 DEFAULT_DURATION: Final = 300
 DEFAULT_RAMP_SECONDS: Final = 30
@@ -38,6 +41,7 @@ DEFAULT_REMINDER_REPEATS: Final = 3
 DEFAULT_REMINDER_INTERVAL: Final = 60
 DEFAULT_MISSED_GRACE: Final = 600
 DEFAULT_DEVICE_STOP_PAUSE: Final = 0
+DEFAULT_TWELVE_HOUR: Final = False
 DEFAULT_TEST_DURATION: Final = 20
 MAX_ALARM_DURATION: Final = 86400  # seconds
 MAX_SNOOZE_MINUTES: Final = 1440

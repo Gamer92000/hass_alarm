@@ -11,6 +11,7 @@ from freezegun.api import FrozenDateTimeFactory
 from pytest_homeassistant_custom_component.common import async_fire_time_changed
 
 from custom_components.voice_alarms.const import (
+    CONF_TWELVE_HOUR,
     INTENT_DELETE,
     INTENT_DISMISS,
     INTENT_LIST,
@@ -126,6 +127,104 @@ async def test_set_past_time_today_rolls_to_tomorrow(
     )
     assert response.response_type == intent.IntentResponseType.ERROR
     assert "already in the past" in speech(response)
+
+
+@pytest.fixture
+def twelve_hour(hass: HomeAssistant, setup_integration, ready):
+    """Turn the twelve hour option on."""
+    hass.config_entries.async_update_entry(
+        setup_integration, options={**setup_integration.options, CONF_TWELVE_HOUR: True}
+    )
+    return ready
+
+
+async def test_set_bare_hour_is_morning_without_the_option(
+    hass: HomeAssistant, ready, satellites
+) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    response = await handle(hass, INTENT_SET, kitchen, time="8")
+    assert "tomorrow (Tuesday 8 September) at 08:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="às 9h30")
+    assert "tomorrow (Tuesday 8 September) at 09:30" in speech(response)
+
+
+async def test_set_bare_hour_rings_at_the_sooner_of_the_two(
+    hass: HomeAssistant, twelve_hour, satellites
+) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    response = await handle(hass, INTENT_SET, kitchen, time="8")
+    assert "today at 20:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="11")
+    assert "today at 11:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="08:00")
+    assert "tomorrow (Tuesday 8 September) at 08:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="8 am")
+    assert "tomorrow (Tuesday 8 September) at 08:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="8", date="tomorrow")
+    assert "tomorrow (Tuesday 8 September) at 08:00" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="8", weekdays="weekdays")
+    assert "at 08:00 weekdays" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="7:30")
+    assert "today at 19:30" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="9:45")
+    assert "today at 21:45" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="10:30")
+    assert "today at 10:30" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="07:30")
+    assert "tomorrow (Tuesday 8 September) at 07:30" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="às 6h15")
+    assert "today at 18:15" in speech(response)
+    response = await handle(hass, INTENT_SET, kitchen, time="5 horas")
+    assert "today at 17:00" in speech(response)
+
+
+async def test_bare_hour_finds_and_moves_alarms(
+    hass: HomeAssistant, twelve_hour, satellites
+) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    await handle(hass, INTENT_SET, kitchen, time="8")  # 20:00 today
+    response = await handle(hass, INTENT_UPDATE, kitchen, time="8", new_time="9")
+    assert "Changed time to 21:00" in speech(response)
+    assert "today at 21:00" in speech(response)
+    # 21:00 is still ahead, and comes before 09:00 tomorrow.
+    response = await handle(hass, INTENT_UPDATE, kitchen, time="9", new_time="9:30")
+    assert "today at 21:30" in speech(response)
+    # A new date names the day, so the morning.
+    response = await handle(
+        hass, INTENT_UPDATE, kitchen, time="9:30", new_time="7", new_date="tomorrow"
+    )
+    assert "tomorrow (Tuesday 8 September) at 07:00" in speech(response)
+
+    await handle(hass, INTENT_SET, kitchen, time="06:00", weekdays="weekdays", name="work")
+    response = await handle(hass, INTENT_UPDATE, kitchen, name="work", new_time="6:30")
+    assert "at 06:30 weekdays" in speech(response)
+
+    # 'At 7' finds the morning and the evening alarm.
+    await handle(hass, INTENT_SET, kitchen, time="19:00", name="tea")
+    response = await handle(hass, INTENT_DELETE, kitchen, time="7")
+    assert "2 alarms match" in speech(response)
+    response = await handle(hass, INTENT_DELETE, kitchen, time="7 pm")
+    assert "Deleted" in speech(response)
+    assert "tea" in speech(response)
+
+
+async def test_update_all_reports_each_new_time(
+    hass: HomeAssistant, twelve_hour, satellites
+) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    await handle(hass, INTENT_SET, kitchen, time="06:00", name="once")
+    await handle(hass, INTENT_SET, kitchen, time="06:00", weekdays="weekdays", name="work")
+    response = await handle(hass, INTENT_UPDATE, kitchen, time="6", new_time="8", all=True)
+    assert "Changed time to 08:00 and 20:00 for 2 alarms" in speech(response)
+
+
+async def test_bare_hour_filter_is_exact_without_the_option(
+    hass: HomeAssistant, ready, satellites
+) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    await handle(hass, INTENT_SET, kitchen, time="20:00")
+    response = await handle(hass, INTENT_DELETE, kitchen, time="8")
+    assert response.response_type == intent.IntentResponseType.ERROR
 
 
 async def test_list_delete_and_ambiguity(hass: HomeAssistant, ready, satellites) -> None:

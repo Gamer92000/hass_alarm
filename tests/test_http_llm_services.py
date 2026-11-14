@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import re
+from datetime import datetime, time
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
+from freezegun.api import FrozenDateTimeFactory
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.typing import (
     ClientSessionGenerator,
@@ -20,6 +23,7 @@ from custom_components.voice_alarms.const import (
     CONF_RAMP_CURVE,
     CONF_RAMP_SECONDS,
     CONF_RAMP_START,
+    CONF_TWELVE_HOUR,
     DEFAULT_RAMP_CURVE,
     DEFAULT_SOUND_URL,
     DOMAIN,
@@ -148,6 +152,46 @@ async def test_llm_tools_exposed(hass: HomeAssistant, satellites, manager) -> No
     )
     api = await llm.async_get_api(hass, llm.LLM_API_ASSIST, no_device)
     assert "not speaking through a voice satellite" in api.api_prompt
+
+
+async def test_llm_times_follow_the_twelve_hour_option(
+    hass: HomeAssistant, freezer: FrozenDateTimeFactory, satellites, manager
+) -> None:
+    await hass.config.async_set_time_zone("Europe/Zurich")
+    freezer.move_to(datetime(2026, 9, 7, 10, 0, tzinfo=ZoneInfo("Europe/Zurich")))
+    context = llm.LLMContext(
+        platform="test",
+        context=Context(),
+        language="en",
+        assistant="conversation",
+        device_id=satellites["kitchen"]["device_id"],
+    )
+
+    def described(api: llm.APIInstance, tool_name: str, slot_name: str) -> str:
+        tool = next(t for t in api.tools if t.name == f"voice_alarms__{tool_name}")
+        return next(k.description for k in tool.parameters.schema if k.schema == slot_name)
+
+    api = await llm.async_get_api(hass, llm.LLM_API_ASSIST, context)
+    assert "Pass times as 24-hour HH:MM" in api.api_prompt
+    assert described(api, "VoiceAlarmSet", "time").startswith("Time in 24-hour HH:MM")
+
+    hass.config_entries.async_update_entry(
+        manager.entry, options={**manager.entry.options, CONF_TWELVE_HOUR: True}
+    )
+    api = await llm.async_get_api(hass, llm.LLM_API_ASSIST, context)
+    assert "do not pick one yourself" in api.api_prompt
+    assert "Pass times as 24-hour HH:MM" not in api.api_prompt
+    assert "exactly as said" in described(api, "VoiceAlarmSet", "time")
+    assert "both the morning and the evening" in described(api, "VoiceAlarmDelete", "time")
+    assert "both the morning and the evening" in described(api, "VoiceAlarmUpdate", "time")
+    assert "one-time alarm rings" in described(api, "VoiceAlarmUpdate", "new_time")
+    # Validation still accepts the slots.
+    tool_result = await api.async_call_tool(
+        llm.ToolInput(tool_name="voice_alarms__VoiceAlarmSet", tool_args={"time": "8"})
+    )
+    assert not tool_result.error
+    alarm = manager.alarms[tool_result.data["speech_slots"]["alarm_id"]]
+    assert alarm.time == time(20, 0)
 
 
 async def test_services(hass: HomeAssistant, satellites, manager) -> None:

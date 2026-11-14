@@ -43,6 +43,7 @@ from .const import (
     CONF_RAMP_START,
     CONF_REMINDER_INTERVAL,
     CONF_REMINDER_REPEATS,
+    CONF_TWELVE_HOUR,
     DEFAULT_DEVICE_STOP_PAUSE,
     DEFAULT_DURATION,
     DEFAULT_MISSED_GRACE,
@@ -51,6 +52,7 @@ from .const import (
     DEFAULT_RAMP_START,
     DEFAULT_REMINDER_INTERVAL,
     DEFAULT_REMINDER_REPEATS,
+    DEFAULT_TWELVE_HOUR,
     DISMISSED_ON_PURPOSE,
     DOMAIN,
     KIND_ALARM,
@@ -174,6 +176,11 @@ class AlarmManager:
     def missed_grace(self) -> timedelta:
         """How long after its time an alarm still fires (e.g. after a restart)."""
         return timedelta(seconds=int(self._opt(CONF_MISSED_GRACE, DEFAULT_MISSED_GRACE)))
+
+    @property
+    def twelve_hour(self) -> bool:
+        """Whether a time said without morning or evening rings at the sooner of the two."""
+        return bool(self._opt(CONF_TWELVE_HOUR, DEFAULT_TWELVE_HOUR))
 
     def config_dict(self) -> dict[str, Any]:
         """Effective configuration for the frontend."""
