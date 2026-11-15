@@ -13,7 +13,8 @@
           "reminder_repeats": "How often a reminder is spoken",
           "reminder_interval": "Pause between reminder repeats",
           "missed_grace": "Still ring an alarm if it was missed by at most",
-          "device_stop_pause": "When the alarm is stopped on the device itself, resume ringing after (0 = treat as dismissed)"
+          "device_stop_pause": "When the alarm is stopped on the device itself, resume ringing after (0 = treat as dismissed)",
+          "twelve_hour": "Read a time said without morning or evening (\"at 8\", \"at 7:30\") as whichever comes first, morning or evening"
         }
       }
     },
@@ -39,7 +40,8 @@
           "reminder_repeats": "How often a reminder is spoken",
           "reminder_interval": "Pause between reminder repeats",
           "missed_grace": "Still ring an alarm if it was missed by at most",
-          "device_stop_pause": "When the alarm is stopped on the device itself, resume ringing after (0 = treat as dismissed)"
+          "device_stop_pause": "When the alarm is stopped on the device itself, resume ringing after (0 = treat as dismissed)",
+          "twelve_hour": "Read a time said without morning or evening (\"at 8\", \"at 7:30\") as whichever comes first, morning or evening"
         }
       }
     },

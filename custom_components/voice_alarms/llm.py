@@ -7,21 +7,41 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import intent
 from homeassistant.helpers.llm import LLM_API_ASSIST, IntentTool, LLMContext, Tool
 
+from . import DATA_MANAGER
 from .const import DOMAIN, INTENT_TYPES
 from .targets import get_target_for_device
 
-PROMPT = (
-    "Alarms and reminders on voice satellites are managed with the voice_alarms__ tools "
-    "(set, list, update, skip next, delete, dismiss). Always use them instead of timers for "
-    "anything at a clock time or on a date; a duration like 'in 20 minutes' is a timer, not "
-    "an alarm. Pass times as 24-hour HH:MM and dates as YYYY-MM-DD ('today', 'tomorrow' and "
-    "weekday names are also accepted). Pick alarms with the time, name or date filters; there "
-    "is no need to list first to get an id. When the user asks what rings on a particular day "
-    "('when will you wake me tomorrow?', 'do I have an alarm on Friday?'), call the list tool "
-    "with that date and answer with just the times it reports. After creating or changing an "
-    "alarm, tell the user exactly what the tool reported: the time, the days, the date of the "
-    "next ring and the satellite. If the tool reports an error or asks a question, relay it."
+_TIMES = (
+    "Pass times as 24-hour HH:MM and dates as YYYY-MM-DD ('today', 'tomorrow' and "
+    "weekday names are also accepted). "
 )
+_TIMES_TWELVE_HOUR = (
+    "Pass a time from 1 to 12 o'clock said without morning, evening, am or pm exactly as "
+    "said ('8', '10:30'): the tools pick the morning or the evening time, so do not pick one "
+    "yourself. When the user does say morning, evening, am or pm, always add am or pm "
+    "('10:30 in the morning' is '10:30 am', never '10:30'; '8 in the evening' is '8 pm'). "
+    "Pass a time from 13 to 23 o'clock as 24-hour HH:MM ('20:00'), and dates as YYYY-MM-DD "
+    "('today', 'tomorrow' and weekday names are also accepted). "
+)
+
+
+def _prompt(times: str) -> str:
+    return (
+        "Alarms and reminders on voice satellites are managed with the voice_alarms__ tools "
+        "(set, list, update, skip next, delete, dismiss). Always use them instead of timers "
+        "for anything at a clock time or on a date; a duration like 'in 20 minutes' is a "
+        "timer, not an alarm. " + times + "Pick alarms with the time, name or date filters; "
+        "there is no need to list first to get an id. When the user asks what rings on a "
+        "particular day ('when will you wake me tomorrow?', 'do I have an alarm on Friday?'), "
+        "call the list tool with that date and answer with just the times it reports. After "
+        "creating or changing an alarm, tell the user exactly what the tool reported: the "
+        "time, the days, the date of the next ring and the satellite. If the tool reports an "
+        "error or asks a question, relay it."
+    )
+
+
+PROMPT = _prompt(_TIMES)
+PROMPT_TWELVE_HOUR = _prompt(_TIMES_TWELVE_HOUR)
 
 
 @callback
@@ -41,7 +61,8 @@ def async_get_tools(hass: HomeAssistant, llm_context: LLMContext, api_id: str) -
     # Set the attribute rather than the IntentTool kwarg, which 2026.9 lacks.
     for tool in tools:
         tool.integration = DOMAIN
-    prompt = PROMPT
+    manager = hass.data.get(DATA_MANAGER)
+    prompt = PROMPT_TWELVE_HOUR if manager is not None and manager.twelve_hour else PROMPT
     target = get_target_for_device(hass, llm_context.device_id)
     if target is not None:
         prompt += (

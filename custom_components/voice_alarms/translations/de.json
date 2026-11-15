@@ -13,7 +13,8 @@
           "reminder_repeats": "Wie oft eine Erinnerung gesprochen wird",
           "reminder_interval": "Pause zwischen den Wiederholungen einer Erinnerung",
           "missed_grace": "Verpassten Wecker trotzdem klingeln lassen, wenn er höchstens so lange her ist",
-          "device_stop_pause": "Wenn der Wecker am Gerät selbst gestoppt wird, nach dieser Zeit weiterklingeln (0 = als beendet behandeln)"
+          "device_stop_pause": "Wenn der Wecker am Gerät selbst gestoppt wird, nach dieser Zeit weiterklingeln (0 = als beendet behandeln)",
+          "twelve_hour": "Eine Uhrzeit ohne morgens oder abends („um 8“, „um 7:30“) als die nächste der beiden verstehen, morgens oder abends"
         }
       }
     },
@@ -39,7 +40,8 @@
           "reminder_repeats": "Wie oft eine Erinnerung gesprochen wird",
           "reminder_interval": "Pause zwischen den Wiederholungen einer Erinnerung",
           "missed_grace": "Verpassten Wecker trotzdem klingeln lassen, wenn er höchstens so lange her ist",
-          "device_stop_pause": "Wenn der Wecker am Gerät selbst gestoppt wird, nach dieser Zeit weiterklingeln (0 = als beendet behandeln)"
+          "device_stop_pause": "Wenn der Wecker am Gerät selbst gestoppt wird, nach dieser Zeit weiterklingeln (0 = als beendet behandeln)",
+          "twelve_hour": "Eine Uhrzeit ohne morgens oder abends („um 8“, „um 7:30“) als die nächste der beiden verstehen, morgens oder abends"
         }
       }
     },

@@ -4,20 +4,34 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Generator
 from datetime import datetime, time, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 from freezegun.api import FrozenDateTimeFactory
-from pytest_homeassistant_custom_component.common import async_fire_time_changed
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+)
 
-from custom_components.voice_alarms.const import DEFAULT_RAMP_CURVE, DOMAIN, STORAGE_KEY
+from custom_components.voice_alarms import get_manager
+from custom_components.voice_alarms.const import (
+    CONF_MISSED_GRACE,
+    DEFAULT_RAMP_CURVE,
+    DOMAIN,
+    ON_TIME_SECONDS,
+    STORAGE_KEY,
+)
 from custom_components.voice_alarms.http import DATA_STREAMS
-from custom_components.voice_alarms.manager import AlarmError
+from custom_components.voice_alarms.manager import AlarmError, AlarmManager
 from custom_components.voice_alarms.models import Alarm
+from custom_components.voice_alarms.ringer import RingSession
 from homeassistant.components.assist_satellite import DOMAIN as SAT_DOMAIN
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import EVENT_HOMEASSISTANT_STOP
+from homeassistant.core import CoreState, HomeAssistant, ServiceCall
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 TZ = ZoneInfo("Europe/Zurich")
@@ -30,7 +44,7 @@ async def local_tz(hass: HomeAssistant) -> None:
 
 
 @pytest.fixture
-def blocking_announce(hass: HomeAssistant, setup_integration) -> SimpleNamespace:
+def blocking_announce(hass: HomeAssistant, setup_integration) -> Generator[SimpleNamespace]:
     """Announce handler that blocks like real playback until released."""
     state = SimpleNamespace(calls=[], release=asyncio.Event())
 
@@ -46,7 +60,9 @@ def blocking_announce(hass: HomeAssistant, setup_integration) -> SimpleNamespace
             spec.finished = True
 
     hass.services.async_register(SAT_DOMAIN, "announce", handler)
-    return state
+    yield state
+    # A test that failed before releasing must not hang the shutdown on its ring.
+    state.release.set()
 
 
 async def _advance(hass: HomeAssistant, freezer: FrozenDateTimeFactory, to: datetime) -> None:
@@ -102,6 +118,505 @@ async def test_one_time_alarm_fires_and_is_removed(
     assert manager.recently_finished(timedelta(minutes=1)) == [session]
     await hass.async_block_till_done()
     assert hass.states.get("switch.voice_alarms_voice_pe_kitchen_tea") is None
+
+
+async def _restart(hass: HomeAssistant, entry: MockConfigEntry) -> AlarmManager:
+    """Stand in for a Home Assistant restart: the manager starts over from storage."""
+    hass.set_state(CoreState.running)
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    return get_manager(hass)
+
+
+async def test_alarm_due_while_stopping_is_kept_for_the_catch_up(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    setup_integration: MockConfigEntry,
+    manager,
+    blocking_announce,
+) -> None:
+    """A restart asked for just before an alarm: it rings after the restart, not during it."""
+    blocking_announce.release.set()  # a ring started by mistake must not hang the test
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    bedroom = satellites["bedroom"]["satellite"]
+    once = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=bedroom, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    hass.set_state(CoreState.stopping)
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert blocking_announce.calls == []
+    assert once.id in manager.alarms
+    assert once.last_fired is None
+    assert daily.last_fired is None
+
+    freezer.move_to(START.replace(minute=6, second=30))
+    manager = await _restart(hass, setup_integration)
+    assert {call.data["entity_id"] for call in blocking_announce.calls} == {kitchen, bedroom}
+    assert once.id not in manager.alarms
+    assert manager.alarms[daily.id].last_fired == START.replace(minute=5)
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_alarm_ringing_when_stopping_rings_again_after_the_restart(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    setup_integration: MockConfigEntry,
+    manager,
+    blocking_announce,
+) -> None:
+    """A ring that a restart cuts short is put back and caught up after the restart."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    bedroom = satellites["bedroom"]["satellite"]
+    once = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=bedroom, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert len(blocking_announce.calls) == 2
+    assert once.id not in manager.alarms
+    assert daily.last_fired == START.replace(minute=5)
+
+    hass.set_state(CoreState.stopping)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert manager.alarms[once.id].last_fired is None
+    assert daily.last_fired is None
+
+    blocking_announce.release.set()
+    freezer.move_to(START.replace(minute=6, second=30))
+    manager = await _restart(hass, setup_integration)
+    rung = [*manager.sessions.values(), *manager.recent_sessions]  # since the restart
+    assert sorted((s.target.entity_id, s.alarm_ids) for s in rung) == [
+        (bedroom, [daily.id]),
+        (kitchen, [once.id]),
+    ]
+    assert once.id not in manager.alarms
+    assert manager.alarms[daily.id].last_fired == START.replace(minute=5)
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_shutdown_saves_the_alarms_it_puts_back(
+    hass: HomeAssistant,
+    hass_storage,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """A real shutdown, which does not unload the entry, still stores what it put back."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    bedroom = satellites["bedroom"]["satellite"]
+    once = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=bedroom, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert len(blocking_announce.calls) == 2
+    # The save after firing is done before the shutdown starts.
+    await _advance(hass, freezer, START.replace(minute=5, second=5))
+    assert {a["id"] for a in hass_storage[STORAGE_KEY]["data"]["alarms"]} == {daily.id}
+
+    await hass.async_stop()
+    stored = {a["id"]: a for a in hass_storage[STORAGE_KEY]["data"]["alarms"]}
+    assert stored.keys() == {once.id, daily.id}
+    assert stored[once.id]["last_fired"] is None
+    assert stored[daily.id]["last_fired"] is None
+
+
+async def test_recurring_alarm_rescheduled_while_ringing_keeps_its_change(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """An alarm moved while it rings is not put back as it was before it fired."""
+    freezer.move_to(START)
+    bedroom = satellites["bedroom"]["satellite"]
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=bedroom, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    yesterday = START.replace(minute=5) - timedelta(days=1)
+    daily.created = yesterday - timedelta(hours=1)
+    daily.last_fired = yesterday
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert len(blocking_announce.calls) == 1
+
+    await manager.async_update_alarm(daily.id, time=time(10, 3))
+    hass.set_state(CoreState.stopping)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    # Moved to a time already past today: the next ring is tomorrow, not a catch-up now.
+    assert daily.next_occurrence(daily.pending_after()) == START.replace(minute=3) + timedelta(
+        days=1
+    )
+    hass.set_state(CoreState.running)
+
+
+async def test_due_alarm_waits_for_its_satellite_to_come_back(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """A satellite still connecting (as after a restart) is waited for, not rung into."""
+    blocking_announce.release.set()
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    alarm = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    hass.states.async_set(kitchen, "unavailable")
+    hass.states.async_set(satellites["kitchen"]["media_player"], "unavailable")
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert blocking_announce.calls == []
+    assert alarm.id in manager.alarms
+
+    freezer.move_to(START.replace(minute=7))
+    hass.states.async_set(kitchen, "idle")
+    await hass.async_block_till_done()
+    assert {call.data["entity_id"] for call in blocking_announce.calls} == {kitchen}
+    assert alarm.id not in manager.alarms
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_satellite_waited_for_until_the_missed_grace(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """A satellite that stays offline past the missed grace: the alarm is missed."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    alarm = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    hass.states.async_set(kitchen, "unavailable")
+    hass.states.async_set(satellites["kitchen"]["media_player"], "unavailable")
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert alarm.id in manager.alarms
+
+    late = manager.missed_grace + timedelta(seconds=ON_TIME_SECONDS)
+    await _advance(hass, freezer, START.replace(minute=5) + late)
+    assert alarm.id in manager.alarms  # still on time, just
+    await _advance(hass, freezer, START.replace(minute=5) + late + timedelta(seconds=1))
+    assert alarm.id not in manager.alarms
+    hass.states.async_set(kitchen, "idle")
+    await hass.async_block_till_done()
+    assert blocking_announce.calls == []
+
+
+def _offline(hass: HomeAssistant, satellite: dict[str, str], state: str = "unavailable") -> None:
+    hass.states.async_set(satellite["satellite"], state)
+    hass.states.async_set(satellite["media_player"], state)
+
+
+async def test_waiting_alarm_is_next_and_can_be_skipped(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """While it waits for its satellite, today's ring is the next one, and skip skips it."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    today = START.replace(minute=5)
+    _offline(hass, satellites["kitchen"])
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert manager.next_for_target(kitchen) == (daily, today)
+    assert daily.public_dict()["next"] == today.isoformat()
+
+    _, skipped = await manager.async_skip_next(daily.id)
+    assert skipped == today
+    _offline(hass, satellites["kitchen"], "idle")
+    await hass.async_block_till_done()
+    assert blocking_announce.calls == []
+    assert daily.next_pending(dt_util.utcnow()) == today + timedelta(days=1)
+
+
+async def test_satellite_offline_rings_through_its_media_player(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """With the media player still there, the ring does not wait: it can fall back to it."""
+    blocking_announce.release.set()
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    alarm = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    hass.states.async_set(kitchen, "unavailable")
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert alarm.id not in manager.alarms
+    assert alarm.waiting is None
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_satellite_removed_while_waited_for(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A satellite deleted while an alarm waits for it: reported at once, not missed later."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    alarm = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    _offline(hass, satellites["kitchen"])
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert alarm.id in manager.alarms
+
+    er.async_get(hass).async_remove(kitchen)
+    await hass.async_block_till_done()
+    assert alarm.id not in manager.alarms
+    assert "Cannot ring alarm 'Tea'" in caplog.text
+    assert blocking_announce.calls == []
+
+
+async def test_ring_dismissed_during_the_shutdown_stays_rung(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """Put back when the shutdown began, then dismissed before the end: it is over."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    bedroom = satellites["bedroom"]["satellite"]
+    once = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    daily = await manager.async_add_alarm(
+        manager.build_alarm(target=bedroom, at=time(10, 5), weekdays=list(range(7)), name="Daily")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    sessions = manager.active_sessions()
+    hass.set_state(CoreState.stopping)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert once.id in manager.alarms
+
+    await manager.async_dismiss()
+    blocking_announce.release.set()
+    for session in sessions:
+        await session.wait_finished()
+    assert once.id not in manager.alarms
+    assert daily.last_fired == START.replace(minute=5)
+    hass.set_state(CoreState.running)
+
+
+async def test_queued_reminder_waits_for_its_satellite(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """A reminder queued behind an alarm waits when the satellite is gone by its turn."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    wake = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Wake")
+    )
+    pills = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Pills", message="Take the pills")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    session = manager.session_for_target(kitchen)
+    assert session.alarm_ids == [wake.id]
+
+    _offline(hass, satellites["kitchen"])
+    session.dismiss()
+    blocking_announce.release.set()
+    await session.wait_finished()
+    await hass.async_block_till_done()
+    assert manager.alarms[pills.id].waiting == START.replace(minute=5)
+    assert manager.session_for_target(kitchen) is None
+
+    _offline(hass, satellites["kitchen"], "idle")
+    await hass.async_block_till_done()
+    rung = [*manager.sessions.values(), *manager.recent_sessions]
+    assert [s.alarm_ids for s in rung if pills.id in s.alarm_ids]
+    assert pills.id not in manager.alarms
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_ring_that_gives_up_on_an_offline_satellite_waits_for_it(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A satellite lost mid-ring: the alarm waits for it again instead of being dropped."""
+
+    async def no_sleep(self, seconds: float) -> None:
+        await asyncio.sleep(0)
+
+    monkeypatch.setattr(RingSession, "_sleep", no_sleep)
+    calls: list[ServiceCall] = []
+
+    async def handler(call: ServiceCall) -> None:
+        calls.append(call)  # never fetches the stream
+        if len(calls) == 1:
+            _offline(hass, satellites["kitchen"])
+
+    hass.services.async_register(SAT_DOMAIN, "announce", handler)
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    alarm = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    for _ in range(1000):  # the ring runs in the background, its retries at once
+        if manager.recent_sessions:
+            break
+        await asyncio.sleep(0)
+    await hass.async_block_till_done()
+    session = manager.recent_sessions[-1]
+    assert session.gave_up
+    assert manager.alarms[alarm.id].waiting == START.replace(minute=5)
+    rang = len(calls)
+
+    _offline(hass, satellites["kitchen"], "idle")
+    await hass.async_block_till_done()
+    assert len(calls) > rang
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_no_missed_grace_still_rings_on_time(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    setup_integration: MockConfigEntry,
+    manager,
+    blocking_announce,
+) -> None:
+    """A missed grace of 0 catches nothing up, but an alarm on time still rings."""
+    blocking_announce.release.set()
+    hass.config_entries.async_update_entry(setup_integration, options={CONF_MISSED_GRACE: 0})
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    alarm = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert blocking_announce.calls
+    assert alarm.id not in manager.alarms
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_queued_reminder_is_put_back_when_stopping(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    setup_integration: MockConfigEntry,
+    manager,
+    blocking_announce,
+) -> None:
+    """A reminder waiting behind an alarm when the shutdown comes rings after the restart."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    wake = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Wake")
+    )
+    pills = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Pills", message="Take the pills")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    assert manager.session_for_target(kitchen).alarm_ids == [wake.id]
+    assert wake.id not in manager.alarms
+    assert pills.id not in manager.alarms
+
+    hass.set_state(CoreState.stopping)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert manager.alarms.keys() == {wake.id, pills.id}
+
+    blocking_announce.release.set()
+    freezer.move_to(START.replace(minute=6, second=30))
+    manager = await _restart(hass, setup_integration)
+    assert manager.alarms == {}
+    rung = [*manager.sessions.values(), *manager.recent_sessions]  # since the restart
+    assert sorted(i for s in rung for i in s.alarm_ids) == sorted([wake.id, pills.id])
+    await manager.async_dismiss()
+    await hass.async_block_till_done()
+
+
+async def test_dismissed_ring_is_not_put_back_when_stopping(
+    hass: HomeAssistant,
+    local_tz,
+    freezer: FrozenDateTimeFactory,
+    satellites,
+    manager,
+    blocking_announce,
+) -> None:
+    """A ring dismissed before the shutdown is over: its alarm does not come back."""
+    freezer.move_to(START)
+    kitchen = satellites["kitchen"]["satellite"]
+    once = await manager.async_add_alarm(
+        manager.build_alarm(target=kitchen, at=time(10, 5), name="Tea")
+    )
+    await _advance(hass, freezer, START.replace(minute=5, second=1))
+    session = manager.session_for_target(kitchen)
+    assert session is not None
+    session.dismiss()
+
+    hass.set_state(CoreState.stopping)
+    hass.bus.async_fire(EVENT_HOMEASSISTANT_STOP)
+    await hass.async_block_till_done()
+    assert once.id not in manager.alarms
+    hass.set_state(CoreState.running)
+    blocking_announce.release.set()
+    await session.wait_finished()
 
 
 async def test_recurring_alarm_skip_and_fire(
