@@ -10,6 +10,7 @@ import pytest
 from freezegun.api import FrozenDateTimeFactory
 
 from custom_components.voice_alarms.const import (
+    CONF_TWELVE_HOUR,
     INTENT_DELETE,
     INTENT_DISMISS,
     INTENT_LIST,
@@ -24,6 +25,7 @@ from custom_components.voice_alarms.i18n import (
     normalize_language,
     set_default_language,
 )
+from custom_components.voice_alarms.intents import _describe_session
 from custom_components.voice_alarms.manager import AlarmError
 from custom_components.voice_alarms.models import (
     Alarm,
@@ -35,10 +37,12 @@ from custom_components.voice_alarms.models import (
 from custom_components.voice_alarms.speech import (
     describe_alarm,
     format_days,
+    format_duration,
     format_relative,
     format_when,
 )
 from homeassistant.components.assist_pipeline import async_get_pipeline, async_update_pipeline
+from homeassistant.components.assist_satellite.const import DATA_COMPONENT as SATELLITE_COMPONENT
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
 from homeassistant.util import dt as dt_util
@@ -159,15 +163,15 @@ def test_format_relative_portuguese() -> None:
 
 
 def test_format_when_portuguese(local_tz) -> None:
-    assert format_when(START.replace(hour=18), START, "pt") == "hoje às dezoito horas"
+    assert format_when(START.replace(hour=18), START, "pt") == "hoje, às dezoito horas"
     assert format_when(START + timedelta(days=1, hours=-4, minutes=30), START, "pt") == (
-        "amanhã (terça-feira, 8 de setembro) às seis e meia"
+        "amanhã (terça-feira, 8 de setembro), às seis e meia"
     )
     assert format_when(START + timedelta(days=4), START, "pt") == (
-        "sexta-feira, 11 de setembro às dez horas"
+        "sexta-feira, 11 de setembro, às dez horas"
     )
     assert format_when(datetime(2027, 1, 8, 7, 0, tzinfo=TZ), START, "pt") == (
-        "sexta-feira, 8 de janeiro de 2027 às sete horas"
+        "sexta-feira, 8 de janeiro de 2027, às sete horas"
     )
 
 
@@ -178,7 +182,7 @@ def test_describe_alarm_portuguese(local_tz) -> None:
     alarm.created = START
     assert describe_alarm(alarm, None, START, language="pt") == (
         "alarme recorrente 'Trabalho' às seis e meia nos dias úteis em assist_satellite.x, "
-        "próxima vez amanhã (terça-feira, 8 de setembro) às seis e meia (em 20 horas e 30 minutos)"
+        "próxima vez amanhã (terça-feira, 8 de setembro), às seis e meia (em 20 horas e 30 minutos)"
     )
     reminder = Alarm(
         target="assist_satellite.x",
@@ -206,6 +210,10 @@ def test_parse_portuguese_words(local_tz) -> None:
     assert parse_weekdays("segundas-feiras e sextas-feiras") == [0, 4]
     assert parse_weekdays("dias úteis") == [0, 1, 2, 3, 4]
     assert parse_weekdays("de segunda a sexta") == [0, 1, 2, 3, 4]
+    assert parse_weekdays("de segunda à sexta-feira") == [0, 1, 2, 3, 4]
+    assert parse_weekdays("seg a qua") == [0, 1, 2]
+    assert parse_weekdays("sexta até domingo") == [4, 5, 6]
+    assert parse_weekdays("sábado a segunda") == [0, 5, 6]
     assert parse_weekdays("todos os dias") == [0, 1, 2, 3, 4, 5, 6]
     assert parse_weekdays("nos fins de semana") == [5, 6]
     assert parse_weekdays(["Seg", "Ter", "Sáb"]) == [0, 1, 5]
@@ -225,11 +233,23 @@ def test_parse_portuguese_words(local_tz) -> None:
     assert parse_time("18 horas") == time(18, 0)
     assert parse_time("às 7") == time(7, 0)
     assert parse_time("7 da manhã") == time(7, 0)
+    assert parse_time("7 da manha") == time(7, 0)
+    assert parse_time("às 7 de manhã") == time(7, 0)
+    assert parse_time("3 de tarde") == time(15, 0)
     assert parse_time("2 da madrugada") == time(2, 0)
     assert parse_time("3 da tarde") == time(15, 0)
     assert parse_time("às 9 da noite") == time(21, 0)
     assert parse_time("meio-dia") == time(12, 0)
     assert parse_time("à meia-noite") == time(0, 0)
+    assert parse_time("às meia-noite") == time(0, 0)
+    assert parse_time("ao meio-dia") == time(12, 0)
+
+
+def test_format_duration_portuguese() -> None:
+    assert format_duration(1, "pt") == "1 segundo"
+    assert format_duration(90, "pt") == "90 segundos"
+    assert format_duration(60, "pt") == "1 minuto"
+    assert format_duration(300, "pt") == "5 minutos"
 
 
 def test_parse_errors_are_localized() -> None:
@@ -257,7 +277,7 @@ async def test_set_repeating_portuguese(hass: HomeAssistant, ready, satellites) 
     assert response.response_type == intent.IntentResponseType.ACTION_DONE
     assert speech(response) == (
         "Criado: alarme recorrente 'Trabalho' às sete horas nos dias úteis em Voice PE Kitchen, "
-        "próxima vez amanhã (terça-feira, 8 de setembro) às sete horas (em 21 horas)."
+        "próxima vez amanhã (terça-feira, 8 de setembro), às sete horas (em 21 horas)."
     )
     assert response.speech_slots["repeats"] == "nos dias úteis"
 
@@ -272,7 +292,7 @@ async def test_set_reminder_portuguese(hass: HomeAssistant, ready, satellites) -
     )
     assert speech(response) == (
         "Criado: lembrete único 'Ligar para a mãe' às dezessete horas de segunda-feira, 7 de setembro "
-        "em Voice PE Kitchen, próxima vez hoje às dezessete horas (em 7 horas)."
+        "em Voice PE Kitchen, próxima vez hoje, às dezessete horas (em 7 horas)."
     )
     assert response.speech_slots["repeats"] == "uma vez"
 
@@ -310,33 +330,72 @@ async def test_skip_and_update_portuguese(hass: HomeAssistant, ready, satellites
     await handle(hass, INTENT_SET, kitchen, time="07:00", weekdays="dias úteis", name="Trabalho")
     response = await handle(hass, INTENT_SKIP_NEXT, kitchen, name="Trabalho")
     assert speech(response) == (
-        "Vou pular o alarme 'Trabalho' em Voice PE Kitchen amanhã (terça-feira, 8 de setembro) "
-        "às sete horas. O próximo toque é quarta-feira, 9 de setembro às sete horas "
+        "Vou pular o alarme 'Trabalho' em Voice PE Kitchen amanhã (terça-feira, 8 de setembro), "
+        "às sete horas. O próximo toque é quarta-feira, 9 de setembro, às sete horas "
         "(em 1 dia e 21 horas)."
     )
     response = await handle(hass, INTENT_SKIP_NEXT, kitchen, name="Trabalho")
     assert response.response_type == intent.IntentResponseType.ERROR
     assert speech(response) == (
-        "O alarme 'Trabalho' em Voice PE Kitchen amanhã (terça-feira, 8 de setembro) às sete horas "
-        "já está pulado; o próximo toque é quarta-feira, 9 de setembro às sete horas "
+        "O alarme 'Trabalho' em Voice PE Kitchen amanhã (terça-feira, 8 de setembro), às sete horas "
+        "já está pulado; o próximo toque é quarta-feira, 9 de setembro, às sete horas "
         "(em 1 dia e 21 horas)."
     )
     response = await handle(hass, INTENT_SKIP_NEXT, kitchen, name="Trabalho", undo=True)
     assert speech(response) == (
-        "Restaurei o alarme 'Trabalho' em Voice PE Kitchen amanhã (terça-feira, 8 de setembro) "
-        "às sete horas; o próximo toque é amanhã (terça-feira, 8 de setembro) às sete horas "
+        "Restaurei o alarme 'Trabalho' em Voice PE Kitchen amanhã (terça-feira, 8 de setembro), "
+        "às sete horas; o próximo toque é amanhã (terça-feira, 8 de setembro), às sete horas "
         "(em 21 horas)."
     )
     response = await handle(
         hass, INTENT_UPDATE, kitchen, name="Trabalho", new_time="06:45", new_weekdays="seg, qua"
     )
     assert speech(response) == (
-        "Pronto: horário alterado para seis horas e quarenta e cinco minutos e agora toca às segundas e às quartas. Ficou "
+        "Pronto: passa a tocar às seis horas e quarenta e cinco minutos e agora toca às segundas e às quartas. Ficou "
         "assim: alarme recorrente 'Trabalho' às seis horas e quarenta e cinco minutos às segundas e às quartas em Voice PE "
-        "Kitchen, próxima vez quarta-feira, 9 de setembro às seis horas e quarenta e cinco minutos (em 1 dia e 20 horas)."
+        "Kitchen, próxima vez quarta-feira, 9 de setembro, às seis horas e quarenta e cinco minutos (em 1 dia e 20 horas)."
     )
     response = await handle(hass, INTENT_UPDATE, kitchen, name="Trabalho", new_weekdays="uma vez")
     assert speech(response).startswith("Pronto: agora toca uma vez só. Ficou assim: alarme único")
+
+
+async def test_update_ring_duration_portuguese(hass: HomeAssistant, ready, satellites) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    await handle(hass, INTENT_SET, kitchen, time="07:00", name="Trabalho")
+    response = await handle(hass, INTENT_UPDATE, kitchen, name="Trabalho", duration_minutes=1)
+    assert speech(response).startswith("Pronto: duração do toque alterada para 1 minuto. ")
+
+
+async def test_recently_stopped_alarm_named_in_portuguese(
+    hass: HomeAssistant, ready, satellites, announce_calls
+) -> None:
+    kitchen = satellites["kitchen"]
+    alarm = Alarm(target=kitchen["satellite"], time=time(7, 0))
+    session = await ready.async_ring(ready.target(kitchen["satellite"]), alarm=alarm)
+    session.dismiss()
+    await session.wait_finished()
+    response = await handle(hass, INTENT_DISMISS, kitchen["device_id"])
+    assert speech(response).startswith(
+        "Nada está tocando agora. O alarme 'Alarme das sete horas' em Voice PE Kitchen "
+        "já foi desligado há "
+    )
+
+
+async def test_update_all_says_each_new_time_portuguese(
+    hass: HomeAssistant, setup_integration, ready, satellites
+) -> None:
+    hass.config_entries.async_update_entry(
+        setup_integration, options={**setup_integration.options, CONF_TWELVE_HOUR: True}
+    )
+    kitchen = satellites["kitchen"]["device_id"]
+    await handle(hass, INTENT_SET, kitchen, time="06:00", name="Uma vez")
+    await handle(hass, INTENT_SET, kitchen, time="06:00", weekdays="dias úteis", name="Trabalho")
+    response = await handle(hass, INTENT_UPDATE, kitchen, time="6", new_time="8:15", all=True)
+    # Each time keeps its own 'às', so the 'e' inside a time does not run into the next.
+    assert speech(response).startswith(
+        "Pronto: passa a tocar às oito horas e quinze minutos e às vinte horas e quinze minutos "
+        "em 2 alarmes."
+    )
 
 
 async def test_errors_portuguese(hass: HomeAssistant, ready, satellites) -> None:
@@ -390,6 +449,81 @@ async def test_reminder_spoken_in_portuguese(
             break
         await asyncio.sleep(0)
     assert announce_calls[0].data["message"] == "Lembrete: Levar o lixo para fora"
+    session.dismiss()
+    await session.wait_finished()
+
+
+@pytest.mark.parametrize(
+    ("language", "tts_language", "expected"),
+    [("pt", "pt_BR", "pt"), ("pt", None, "pt"), ("fr", "fr_FR", "en")],
+)
+async def test_spoken_language_follows_pipeline(
+    hass: HomeAssistant,
+    ready,
+    satellites,
+    announce_calls,
+    language: str,
+    tts_language: str | None,
+    expected: str,
+) -> None:
+    # The voice's language, else the pipeline's; one without strings gets English.
+    set_default_language("de")
+    await async_update_pipeline(
+        hass, async_get_pipeline(hass), language=language, tts_language=tts_language
+    )
+    session = await ready.async_ring(
+        ready.target(satellites["kitchen"]["satellite"]), label="Teste", origin="test"
+    )
+    assert session._spoken_language() == expected
+    session.dismiss()
+    await session.wait_finished()
+
+
+async def test_spoken_language_without_satellites(
+    hass: HomeAssistant, ready, satellites, announce_calls, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No satellite component to ask: the instance language.
+    set_default_language("de")
+    session = await ready.async_ring(
+        ready.target(satellites["kitchen"]["satellite"]), label="Teste", origin="test"
+    )
+    with monkeypatch.context() as patch:
+        patch.delitem(hass.data, SATELLITE_COMPONENT)
+        assert session._spoken_language() == "de"
+    session.dismiss()
+    await session.wait_finished()
+
+
+async def test_unnamed_reminder_spoken_in_pipeline_language(
+    hass: HomeAssistant, ready, satellites, announce_calls
+) -> None:
+    # Without a message the label is said, in the voice's language like the prefix.
+    await async_update_pipeline(hass, async_get_pipeline(hass), language="pt", tts_language="pt_BR")
+    kitchen = satellites["kitchen"]["satellite"]
+    reminder = Alarm(target=kitchen, time=time(7, 0), kind=KIND_REMINDER)
+    session = await ready.async_ring(ready.target(kitchen), alarm=reminder, kind=KIND_REMINDER)
+    for _ in range(10):
+        if announce_calls:
+            break
+        await asyncio.sleep(0)
+    assert announce_calls[0].data["message"] == f"Lembrete: {reminder.label_in('pt')}"
+    session.dismiss()
+    await session.wait_finished()
+
+
+async def test_session_names_every_alarm_in_portuguese(
+    hass: HomeAssistant, ready, satellites, announce_calls
+) -> None:
+    kitchen = satellites["kitchen"]["satellite"]
+    target = ready.target(kitchen)
+    session = await ready.async_ring(target, alarm=Alarm(target=kitchen, time=time(7, 0)))
+    joined = await ready.async_ring(
+        target, alarm=Alarm(target=kitchen, time=time(7, 0), name="Trabalho")
+    )
+    assert joined is session
+    assert _describe_session(session, "pt") == (
+        "o alarme 'Alarme das sete horas & Trabalho' em Voice PE Kitchen"
+    )
     session.dismiss()
     await session.wait_finished()
 

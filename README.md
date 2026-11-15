@@ -93,8 +93,8 @@ understand German words (*morgen*, *übermorgen*, *wochentags*, *montag*, *7 Uhr
 Portuguese ones (*amanhã*, *depois de amanhã*, *dias úteis*, *segunda*, *7 da manhã*,
 *meio-dia*, …). Everything tied
 to the instance rather than to a conversation follows the Home Assistant language setting:
-the default alarm labels in the panel ("Wecker 07:00"; a reply names them in the language
-of the conversation), snooze names and service errors. The spoken
+the default alarm labels in the panel ("Wecker 07:00"; a reply that names one, such as
+for a ringing alarm, does so in the language of the conversation), snooze names and service errors. The spoken
 *Erinnerung:* prefix of reminders is in the language of the satellite's pipeline, the voice
 that speaks it.
 

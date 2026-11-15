@@ -109,6 +109,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "unit_hours": "{n} hours",
         "unit_minute": "{n} minute",
         "unit_minutes": "{n} minutes",
+        "unit_second": "{n} second",
         "unit_seconds": "{n} seconds",
         "long_day": "{weekday} {day} {month}",
         "long_day_year": "{weekday} {day} {month} {year}",
@@ -209,7 +210,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "change_target": "satellite to {target}",
         "change_enabled": "enabled it",
         "change_disabled": "disabled it",
-        "change_duration": "ring duration to {minutes} minutes",
+        "change_duration": "ring duration to {duration}",
         "err_nothing_to_change": (
             "Nothing to change: give a new time, days, name, target or enabled flag."
         ),
@@ -265,6 +266,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "unit_hours": "{n} Stunden",
         "unit_minute": "{n} Minute",
         "unit_minutes": "{n} Minuten",
+        "unit_second": "{n} Sekunde",
         "unit_seconds": "{n} Sekunden",
         "long_day": "{weekday}, {day}. {month}",
         "long_day_year": "{weekday}, {day}. {month} {year}",
@@ -365,7 +367,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "change_target": "Satellit auf {target}",
         "change_enabled": "aktiviert",
         "change_disabled": "deaktiviert",
-        "change_duration": "Klingeldauer auf {minutes} Minuten",
+        "change_duration": "Klingeldauer auf {duration}",
         "err_nothing_to_change": (
             "Nichts zu ändern: gib eine neue Uhrzeit, neue Tage, einen neuen Namen, ein neues "
             "Ziel oder enabled an."
@@ -420,13 +422,14 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "unit_hours": "{n} horas",
         "unit_minute": "{n} minuto",
         "unit_minutes": "{n} minutos",
+        "unit_second": "{n} segundo",
         "unit_seconds": "{n} segundos",
         "long_day": "{weekday}, {day} de {month}",
         "long_day_year": "{weekday}, {day} de {month} de {year}",
         "day_today": "hoje",
         "day_tomorrow": "amanhã ({day})",
         "day_on": "{day}",
-        "when_at": "{day} {time}",
+        "when_at": "{day}, {time}",
         "schedule_recurring": "{time} {days}",
         "schedule_date": "{time} de {day}",
         "kind_alarm": "alarme",
@@ -509,7 +512,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "reinstate_many": "Restaurei {count} alarmes: {segments}.",
         "next_ring": " O próximo toque é {when} ({relative}).",
         "err_update_none": "Não há alarmes para alterar.",
-        "change_time": "horário alterado para {time}",
+        "change_time": "passa a tocar {time}",
         "change_once": "agora toca uma vez só",
         "change_repeat": "agora toca {days}",
         "change_date": "data alterada para {date}",
@@ -518,10 +521,10 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "change_target": "satélite alterado para {target}",
         "change_enabled": "ativado",
         "change_disabled": "desativado",
-        "change_duration": "duração do toque alterada para {minutes} minutos",
+        "change_duration": "duração do toque alterada para {duration}",
         "err_nothing_to_change": (
             "Nada para alterar: informe um novo horário, novos dias, um novo nome, um novo "
-            "satélite ou enabled."
+            "satélite ou se fica ativado."
         ),
         "changed_one": "Pronto: {changes}. Ficou assim: {alarm}.",
         "changed_many": "Pronto: {changes} em {count} alarmes. Ficaram assim: {alarms}.",

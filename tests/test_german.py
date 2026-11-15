@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from freezegun.api import FrozenDateTimeFactory
 
+from custom_components.voice_alarms import ringer
 from custom_components.voice_alarms.const import (
     INTENT_DELETE,
     INTENT_DISMISS,
@@ -39,6 +40,7 @@ from custom_components.voice_alarms.speech import (
     format_when,
 )
 from homeassistant.components.assist_pipeline import async_get_pipeline, async_update_pipeline
+from homeassistant.components.assist_pipeline.error import PipelineNotFound
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import intent
 from homeassistant.util import dt as dt_util
@@ -352,6 +354,28 @@ async def test_reminder_spoken_in_german(
 ) -> None:
     # The satellite speaks in its pipeline's language, whatever the instance language is.
     await async_update_pipeline(hass, async_get_pipeline(hass), language="de", tts_language="de_DE")
+    target = ready.target(satellites["kitchen"]["satellite"])
+    session = await ready.async_ring(
+        target, kind=KIND_REMINDER, message="Müll rausbringen", label="Test", origin="test"
+    )
+    for _ in range(10):
+        if announce_calls:
+            break
+        await asyncio.sleep(0)
+    assert announce_calls[0].data["message"] == "Erinnerung: Müll rausbringen"
+    session.dismiss()
+    await session.wait_finished()
+
+
+async def test_reminder_without_pipeline_in_instance_language(
+    hass: HomeAssistant, ready, satellites, announce_calls, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No pipeline to ask: the prefix falls back to the instance language, and is still said.
+    def missing(*args: object, **kwargs: object) -> None:
+        raise PipelineNotFound("pipeline_not_found", "gone")
+
+    monkeypatch.setattr(ringer, "async_get_pipeline", missing)
+    set_default_language("de")
     target = ready.target(satellites["kitchen"]["satellite"])
     session = await ready.async_ring(
         target, kind=KIND_REMINDER, message="Müll rausbringen", label="Test", origin="test"

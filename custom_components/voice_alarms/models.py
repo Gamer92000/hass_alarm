@@ -20,15 +20,27 @@ from .i18n import WEEKDAYS, LocalizedError, default_language, format_clock, tr
 _TIME_RE = re.compile(
     r"^\s*(?:às?\s+|as\s+)?(?P<h>\d{1,2})"
     r"(?:[:.h](?P<m>\d{2})\s*(?:min(?:utos?)?|uhr)?|\s*(?:uhr|horas?|h))?"
-    r"\s*(?P<ampm>[ap]\.?m\.?|da (?:manhã|madrugada|tarde|noite))?\s*$",
+    r"\s*(?P<ampm>[ap]\.?m\.?|d[ae] (?:manh[ãa]|madrugada|tarde|noite))?\s*$",
     re.IGNORECASE,
 )
 _DATE_RE = re.compile(r"^\s*(?P<y>\d{4})-(?P<m>\d{1,2})-(?P<d>\d{1,2})\s*$")
 _REL_RE = re.compile(r"^\s*\+\s*(?P<n>\d+)\s*(?:d|days?|tage?|dias?)?\s*$", re.IGNORECASE)
 # 'segunda-feira', 'segunda feira' and 'segundas-feiras' all reduce to the short form.
 _FEIRA_RE = re.compile(r"[\s-]+feiras?\b")
+# A run of days: 'de segunda a sexta', 'segunda à sexta', 'sexta até domingo'.
+_DAY_RANGE_RE = re.compile(r"^(?:de\s+)?(?P<first>\S+)\s+(?:a|à|até)\s+(?P<last>\S+)$")
 
-_PERIODS = {"da manhã": "am", "da madrugada": "am", "da tarde": "pm", "da noite": "pm"}
+_PERIODS = {
+    f"{of} {period}": half
+    for of in ("da", "de")
+    for period, half in (
+        ("manhã", "am"),
+        ("manha", "am"),
+        ("madrugada", "am"),
+        ("tarde", "pm"),
+        ("noite", "pm"),
+    )
+}
 _NAMED_TIMES = {
     "meio-dia": time(12, 0),
     "meio dia": time(12, 0),
@@ -115,7 +127,6 @@ _WEEKDAY_GROUPS: dict[str, list[int]] = {
     "nos dias uteis": [0, 1, 2, 3, 4],
     "dias de semana": [0, 1, 2, 3, 4],
     "durante a semana": [0, 1, 2, 3, 4],
-    "de segunda a sexta": [0, 1, 2, 3, 4],
     "fim de semana": [5, 6],
     "fins de semana": [5, 6],
     "final de semana": [5, 6],
@@ -186,7 +197,7 @@ def parse_time(value: Any) -> time:
     if isinstance(value, time):
         return value.replace(second=0, microsecond=0)
     text = str(value)
-    named = re.sub(r"^(?:ao|à|a)\s+", "", text.strip().lower())
+    named = re.sub(r"^(?:ao|às?|as?)\s+", "", text.strip().lower())
     if named in _NAMED_TIMES:
         return _NAMED_TIMES[named]
     match = _TIME_RE.match(text)
@@ -246,6 +257,11 @@ def parse_weekdays(value: Any) -> list[int]:
             return []
         if lowered in _WEEKDAY_GROUPS:
             return list(_WEEKDAY_GROUPS[lowered])
+        if (run := _DAY_RANGE_RE.match(lowered)) and (
+            run["first"] in _WEEKDAY_ALIASES and run["last"] in _WEEKDAY_ALIASES
+        ):
+            first, last = _WEEKDAY_ALIASES[run["first"]], _WEEKDAY_ALIASES[run["last"]]
+            return sorted((first + step) % 7 for step in range((last - first) % 7 + 1))
         parts: list[Any] = [
             p
             for p in re.split(r"[,\s/;]+|\band\b|\bund\b|\b(?:e|às|as|aos|nas|nos)\b", lowered)

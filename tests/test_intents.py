@@ -175,6 +175,15 @@ async def test_set_bare_hour_rings_at_the_sooner_of_the_two(
     assert "today at 17:00" in speech(response)
 
 
+async def test_update_ring_duration(hass: HomeAssistant, ready, satellites) -> None:
+    kitchen = satellites["kitchen"]["device_id"]
+    await handle(hass, INTENT_SET, kitchen, time="07:00", name="work")
+    response = await handle(hass, INTENT_UPDATE, kitchen, name="work", duration_minutes=1)
+    assert speech(response).startswith("Changed ring duration to 1 minute. ")
+    response = await handle(hass, INTENT_UPDATE, kitchen, name="work", duration_minutes=5)
+    assert speech(response).startswith("Changed ring duration to 5 minutes. ")
+
+
 async def test_bare_hour_finds_and_moves_alarms(
     hass: HomeAssistant, twelve_hour, satellites
 ) -> None:

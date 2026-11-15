@@ -49,6 +49,7 @@ from .speech import (
     describe_briefly,
     format_day,
     format_days,
+    format_duration,
     format_relative,
     format_when,
     join_list,
@@ -889,7 +890,9 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
             described.append(tr(lang, "change_enabled" if enabled else "change_disabled"))
         if duration_minutes := self._slot(intent_obj, "duration_minutes"):
             changes["duration"] = int(duration_minutes) * 60
-            described.append(tr(lang, "change_duration", minutes=duration_minutes))
+            described.append(
+                tr(lang, "change_duration", duration=format_duration(changes["duration"], lang))
+            )
         if not changes:
             raise IntentFailed("err_nothing_to_change")
         updates: list[tuple[str, dict[str, Any]]] = []
@@ -907,9 +910,12 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
                 alarm_changes["time"] = sooner_half_day(new_halves[0], now)
             updates.append((alarm.id, alarm_changes))
         if "time" in changes:
+            # Alarms can end up at different times; 'às' keeps one spoken time from the next.
             times = sorted({c["time"] for _, c in updates})
             described[0] = tr(
-                lang, "change_time", time=join_list([format_clock(t, lang) for t in times], lang)
+                lang,
+                "change_time",
+                time=join_list([format_clock(t, lang, "at") for t in times], lang),
             )
         # All or nothing: one invalid change must not leave the others half done.
         updated = await self.manager.async_update_alarms(updates)
@@ -988,7 +994,7 @@ class DismissIntent(_VoiceAlarmIntent):
                 raise IntentFailed(
                     "err_nothing_ringing_recent",
                     kind=tr(lang, f"The_{last.kind}"),
-                    label=last.label,
+                    label=" & ".join(a.label_in(lang) for a in last.alarms) or last.label,
                     target=last.target.display,
                     how=tr(lang, how_key, ago=ago),
                 )
@@ -1056,7 +1062,7 @@ def _describe_session(session: RingSession, lang: str) -> str:
         lang,
         "session",
         kind=tr(lang, f"the_{session.kind}"),
-        label=session.alarms[0].label_in(lang) if session.alarms else session.label,
+        label=" & ".join(a.label_in(lang) for a in session.alarms) or session.label,
         target=session.target.display,
         state=tr(lang, "paused") if session.state == STATE_PAUSED else "",
     )

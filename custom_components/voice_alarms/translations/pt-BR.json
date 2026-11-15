@@ -68,7 +68,7 @@
       "fields": {
         "target": { "name": "Satélite", "description": "O satélite do Assist em que o alarme toca." },
         "time": { "name": "Horário", "description": "Horário no formato 24 horas, por exemplo 06:30." },
-        "date": { "name": "Data", "description": "Data de um alarme único (AAAA-MM-DD, today, tomorrow, nome do dia da semana). Ignorada quando há dias da semana." },
+        "date": { "name": "Data", "description": "Data de um alarme único (AAAA-MM-DD, hoje, amanhã, nome do dia da semana). Ignorada quando há dias da semana." },
         "weekdays": { "name": "Repetir em", "description": "Dias da semana (mon..sun) de um alarme recorrente. Deixe vazio para um alarme único." },
         "name": { "name": "Nome", "description": "Nome do alarme." },
         "message": { "name": "Mensagem", "description": "Texto a ser falado. Faz disso um lembrete em vez de um alarme." },

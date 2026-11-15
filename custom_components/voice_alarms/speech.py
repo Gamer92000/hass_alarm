@@ -126,7 +126,7 @@ def format_duration(seconds: int, language: str = DEFAULT_LANGUAGE) -> str:
     """Describe a duration in seconds."""
     if seconds % 60 == 0:
         return _unit(seconds // 60, "minute", language)
-    return tr(language, "unit_seconds", n=seconds)
+    return _unit(seconds, "second", language)
 
 
 def describe_schedule(alarm: Alarm, language: str = DEFAULT_LANGUAGE) -> str:

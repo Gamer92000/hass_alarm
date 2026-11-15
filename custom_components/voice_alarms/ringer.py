@@ -464,7 +464,9 @@ class RingSession:
                 attempt = 0
             attempt += 1
             # Read on every repeat: reminders that joined add to the message.
-            spoken = tr(self._spoken_language(), "spoken_reminder", text=self.message or self.label)
+            language = self._spoken_language()
+            text = self.message or " & ".join(a.label_in(language) for a in self.alarms)
+            spoken = tr(language, "spoken_reminder", text=text or self.label)
             try:
                 if not self._via_player:
                     started = time.monotonic()
@@ -504,7 +506,11 @@ class RingSession:
 
     def _spoken_language(self) -> str:
         """The language the satellite's voice speaks, else the instance language."""
-        pipeline = self._pipeline()
+        try:
+            pipeline = self._pipeline()
+        except (KeyError, HomeAssistantError):
+            # No satellite component or no such pipeline: the reminder is still said.
+            return default_language()
         language = pipeline.tts_language or pipeline.language
         return normalize_language(language) if language else default_language()
 

@@ -238,7 +238,7 @@ const STRINGS = {
     alarms: "Alarmes",
     reminders: "Lembretes",
     no_alarms: "Nenhum alarme ainda. Crie um aqui ou diga “crie um alarme para as 7” a um satélite.",
-    no_reminders: "Nenhum lembrete ainda. Crie um aqui ou diga “me lembre às 6 de levar o lixo para fora” a um satélite.",
+    no_reminders: "Nenhum lembrete ainda. Crie um aqui ou diga “me lembre de levar o lixo para fora às 6” a um satélite.",
     satellites: "Satélites",
     no_satellites: "Nenhum satélite do Assist encontrado. Configure primeiro um satélite Voice PE ou Wyoming.",
     volume_via: "volume via {player}",
