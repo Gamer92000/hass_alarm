@@ -35,6 +35,7 @@ from .i18n import LocalizedError, format_clock, normalize_language, tr
 from .manager import AlarmManager
 from .models import (
     Alarm,
+    ParseError,
     both_halves,
     parse_date,
     parse_time,
@@ -109,6 +110,10 @@ TARGET_FILTER_HELP = "Satellite the alarm belongs to (name/area), to find it."
 
 class IntentFailed(LocalizedError):
     """User facing failure; ``key`` names the text in ``i18n.py``."""
+
+
+class NothingRinging(IntentFailed):
+    """Nothing to stop: a local sentence ('stop the alarm') is better left to the LLM."""
 
 
 class _VoiceAlarmIntent(intent.IntentHandler):
@@ -299,6 +304,13 @@ class _VoiceAlarmIntent(intent.IntentHandler):
         lang = self._lang(intent_obj)
         try:
             await self._handle(intent_obj, response)
+        except (NothingRinging, ParseError) as err:
+            # Not FAILED_TO_HANDLE: a pipeline that prefers local intents hands these on to
+            # its conversation agent instead of speaking them. Nothing to stop, or words a
+            # local sentence caught as a time or a date but that do not parse as one.
+            response.async_set_error(
+                intent.IntentResponseErrorCode.NO_VALID_TARGETS, err.localized(lang)
+            )
         except LocalizedError as err:  # IntentFailed, AlarmError, ParseError
             response.async_set_error(
                 intent.IntentResponseErrorCode.FAILED_TO_HANDLE, err.localized(lang)
@@ -972,7 +984,7 @@ class DismissIntent(_VoiceAlarmIntent):
             target = self._resolve_target(intent_obj, target_query)
             session = self.manager.session_for_target(target.entity_id)
             if session is None:
-                raise IntentFailed("err_nothing_ringing_on", target=target.display)
+                raise NothingRinging("err_nothing_ringing_on", target=target.display)
             sessions = [session]
         else:
             current = self._current_target(intent_obj)
@@ -991,14 +1003,14 @@ class DismissIntent(_VoiceAlarmIntent):
                     "user": "how_user",
                     "snooze": "how_snooze",
                 }.get(last.dismissed_by or "", "how_other")
-                raise IntentFailed(
+                raise NothingRinging(
                     "err_nothing_ringing_recent",
                     kind=tr(lang, f"The_{last.kind}"),
                     label=" & ".join(a.label_in(lang) for a in last.alarms) or last.label,
                     target=last.target.display,
                     how=tr(lang, how_key, ago=ago),
                 )
-            raise IntentFailed("err_nothing_ringing")
+            raise NothingRinging("err_nothing_ringing")
 
         if snooze:
             created = [await self.manager.async_snooze(s, int(snooze)) for s in sessions]
