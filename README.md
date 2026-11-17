@@ -101,7 +101,11 @@ that speaks it.
 The built-in (non-LLM) Assist agent does not have sentences for these intents out of the
 box. You can add your own under `custom_sentences/<lang>/voice_alarms.yaml` targeting the
 intents `VoiceAlarmSet`, `VoiceAlarmList`, `VoiceAlarmDelete`, `VoiceAlarmSkipNext`,
-`VoiceAlarmUpdate` and `VoiceAlarmDismiss`.
+`VoiceAlarmUpdate` and `VoiceAlarmDismiss`. On a pipeline that prefers handling commands
+locally, two answers from those sentences are left to the conversation agent instead of
+being spoken: a stop sentence with nothing ringing ("stop the alarm" may mean disabling
+one), and a time or date the sentence caught but that does not parse ("wake me up at
+seven-ish").
 
 ### Stopping an alarm on the device
 

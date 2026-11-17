@@ -1,0 +1,14 @@
+# A minimal set of the sentences a user would write, for tests/test_sentences.py.
+language: "en"
+intents:
+  VoiceAlarmSet:
+    data:
+      - sentences:
+          - "wake me [up] at {time}"
+  VoiceAlarmDismiss:
+    data:
+      - sentences:
+          - "stop the alarm"
+lists:
+  time:
+    wildcard: true

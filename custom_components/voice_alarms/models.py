@@ -16,10 +16,10 @@ from .const import KIND_ALARM, KIND_REMINDER, KINDS, WEEKDAY_CODES
 from .i18n import WEEKDAYS, LocalizedError, default_language, format_clock, tr
 
 # '7:30', '19.30', '7 pm', '8 Uhr', and as written in Portuguese: 'às 8', '8 horas', '7h30',
-# '1h38min', '8 da noite'.
+# '1h38min', '13h05m', '8 da noite'.
 _TIME_RE = re.compile(
     r"^\s*(?:às?\s+|as\s+)?(?P<h>\d{1,2})"
-    r"(?:[:.h](?P<m>\d{2})\s*(?:min(?:utos?)?|uhr)?|\s*(?:uhr|horas?|h))?"
+    r"(?:[:.h](?P<m>\d{2})\s*(?:min(?:utos?)?|m|uhr)?|\s*(?:uhr|horas?|h))?"
     r"\s*(?P<ampm>[ap]\.?m\.?|d[ae] (?:manh[ãa]|madrugada|tarde|noite))?\s*$",
     re.IGNORECASE,
 )
