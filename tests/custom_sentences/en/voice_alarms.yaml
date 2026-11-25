@@ -9,6 +9,12 @@ intents:
     data:
       - sentences:
           - "stop the alarm"
+          - "stop the alarm in the {target}"
+          - "snooze [the alarm] for {snooze_minutes} minutes"
 lists:
   time:
+    wildcard: true
+  snooze_minutes:
+    wildcard: true
+  target:
     wildcard: true

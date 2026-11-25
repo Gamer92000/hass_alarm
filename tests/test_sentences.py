@@ -89,3 +89,44 @@ async def test_stop_with_nothing_ringing_goes_to_the_agent(
 ) -> None:
     # "Stop the alarm" may mean disabling one, which only the LLM can tell.
     assert await handle_locally(hass, "stop the alarm", satellites) is None
+
+
+async def test_stop_just_after_it_stopped_is_answered_locally(
+    hass: HomeAssistant, ready, satellites
+) -> None:
+    # It just stopped: the LLM must not get the chance to read this as disabling it.
+    target = ready.target(satellites["kitchen"]["satellite"])
+    session = await ready.async_ring(target, label="Test", duration=60, origin="test")
+    session.dismiss(by="device")
+    await session.wait_finished()
+    response = await handle_locally(hass, "stop the alarm", satellites)
+    assert response is not None
+    assert response.response_type == intent.IntentResponseType.ERROR
+    assert response.error_code == intent.IntentResponseErrorCode.FAILED_TO_HANDLE
+    assert "was stopped on the device" in response.speech["plain"]["speech"]
+
+
+async def test_snooze_in_words_goes_to_the_agent(hass: HomeAssistant, ready, satellites) -> None:
+    # The sentence caught 'ten' as the minutes; only the LLM can make it 10.
+    target = ready.target(satellites["kitchen"]["satellite"])
+    session = await ready.async_ring(target, label="Test", duration=60, origin="test")
+    assert await handle_locally(hass, "snooze the alarm for ten minutes", satellites) is None
+    assert ready.session_for_target(target.entity_id) is session
+    response = await handle_locally(hass, "snooze the alarm for 10 minutes", satellites)
+    assert response is not None
+    assert response.response_type == intent.IntentResponseType.ACTION_DONE, response.speech
+
+
+async def test_stop_on_a_satellite_just_after_it_stopped_is_answered_locally(
+    hass: HomeAssistant, ready, satellites
+) -> None:
+    target = ready.target(satellites["kitchen"]["satellite"])
+    session = await ready.async_ring(target, label="Test", duration=60, origin="test")
+    session.dismiss(by="device")
+    await session.wait_finished()
+    response = await handle_locally(hass, "stop the alarm in the kitchen", satellites)
+    assert response is not None
+    assert response.error_code == intent.IntentResponseErrorCode.FAILED_TO_HANDLE
+    assert "was stopped on the device" in response.speech["plain"]["speech"]
+    # What stopped in the kitchen says nothing about the bedroom: that one is handed on.
+    assert await handle_locally(hass, "stop the alarm in the bedroom", satellites) is None
