@@ -249,6 +249,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "err_weekday_int": "'{text}' is not a weekday (use 0=Monday .. 6=Sunday)",
         "err_date_invalid": "'{text}' is not a valid date",
         "err_date_format": "'{text}' is not a valid date, use YYYY-MM-DD",
+        "err_minutes_invalid": "'{text}' is not a number of minutes",
     },
     "de": {
         "and": " und ",
@@ -405,6 +406,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "err_weekday_int": "'{text}' ist kein Wochentag (verwende 0=Montag .. 6=Sonntag)",
         "err_date_invalid": "'{text}' ist kein gültiges Datum",
         "err_date_format": "'{text}' ist kein gültiges Datum, verwende JJJJ-MM-TT",
+        "err_minutes_invalid": "'{text}' ist keine Anzahl Minuten",
     },
     "pt": {
         "and": " e ",
@@ -559,6 +561,7 @@ STRINGS: Final[dict[str, dict[str, str]]] = {
         "err_weekday_int": "'{text}' não é um dia da semana (use 0=segunda-feira .. 6=domingo)",
         "err_date_invalid": "'{text}' não é uma data válida",
         "err_date_format": "'{text}' não é uma data válida, use AAAA-MM-DD",
+        "err_minutes_invalid": "'{text}' não é um número de minutos",
     },
 }
 

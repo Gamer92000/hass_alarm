@@ -230,6 +230,9 @@ def test_parse_portuguese_words(local_tz) -> None:
     assert parse_date("segunda", START).isoformat() == "2026-09-07"
     assert parse_time("7h") == time(7, 0)
     assert parse_time("7h30") == time(7, 30)
+    assert parse_time("1h38min") == time(1, 38)
+    assert parse_time("13h05m") == time(13, 5)
+    assert parse_time("7h30 minutos") == time(7, 30)
     assert parse_time("18 horas") == time(18, 0)
     assert parse_time("às 7") == time(7, 0)
     assert parse_time("7 da manhã") == time(7, 0)

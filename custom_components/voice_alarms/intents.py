@@ -35,6 +35,7 @@ from .i18n import LocalizedError, format_clock, normalize_language, tr
 from .manager import AlarmManager
 from .models import (
     Alarm,
+    ParseError,
     both_halves,
     parse_date,
     parse_time,
@@ -109,6 +110,18 @@ TARGET_FILTER_HELP = "Satellite the alarm belongs to (name/area), to find it."
 
 class IntentFailed(LocalizedError):
     """User facing failure; ``key`` names the text in ``i18n.py``."""
+
+
+class NothingRinging(IntentFailed):
+    """Nothing to stop: a local sentence ('stop the alarm') is better left to the LLM."""
+
+
+def _minutes(value: Any) -> int:
+    """A minutes slot as a number; a local sentence may catch it as words ('ten')."""
+    try:
+        return int(value)
+    except (TypeError, ValueError) as err:
+        raise ParseError("err_minutes_invalid", text=str(value)) from err
 
 
 class _VoiceAlarmIntent(intent.IntentHandler):
@@ -299,7 +312,15 @@ class _VoiceAlarmIntent(intent.IntentHandler):
         lang = self._lang(intent_obj)
         try:
             await self._handle(intent_obj, response)
-        except LocalizedError as err:  # IntentFailed, AlarmError, ParseError
+        except (NothingRinging, ParseError) as err:
+            # Not FAILED_TO_HANDLE: a pipeline that prefers local intents hands these on to
+            # its conversation agent instead of speaking them. Nothing to stop, or words a
+            # local sentence caught as a time, a date, weekdays or minutes but that do not
+            # parse as such.
+            response.async_set_error(
+                intent.IntentResponseErrorCode.NO_VALID_TARGETS, err.localized(lang)
+            )
+        except LocalizedError as err:  # IntentFailed, AlarmError
             response.async_set_error(
                 intent.IntentResponseErrorCode.FAILED_TO_HANDLE, err.localized(lang)
             )
@@ -368,7 +389,7 @@ class SetAlarmIntent(_VoiceAlarmIntent):
             name=self._slot(intent_obj, "name"),
             message=message,
             kind=KIND_REMINDER if message else KIND_ALARM,
-            duration=int(duration_minutes) * 60 if duration_minutes else None,
+            duration=_minutes(duration_minutes) * 60 if duration_minutes else None,
         )
         alarm = await self.manager.async_add_alarm(alarm)
         nxt = alarm.next_pending(dt_util.utcnow())
@@ -889,7 +910,7 @@ class UpdateAlarmIntent(_VoiceAlarmIntent):
             changes["enabled"] = bool(enabled)
             described.append(tr(lang, "change_enabled" if enabled else "change_disabled"))
         if duration_minutes := self._slot(intent_obj, "duration_minutes"):
-            changes["duration"] = int(duration_minutes) * 60
+            changes["duration"] = _minutes(duration_minutes) * 60
             described.append(
                 tr(lang, "change_duration", duration=format_duration(changes["duration"], lang))
             )
@@ -962,6 +983,37 @@ class DismissIntent(_VoiceAlarmIntent):
         ): vol.Coerce(int),
     }
 
+    def _raise_if_just_stopped(
+        self, lang: str, now: datetime, entity_id: str | None = None
+    ) -> None:
+        """Say what stopped recently (on ``entity_id``, or anywhere), if anything did.
+
+        Answered here, not handed on: it just stopped, and the LLM might take "stop the
+        alarm" as disabling the alarm the user only wanted silenced.
+        """
+        recent = [
+            s
+            for s in self.manager.recently_finished(timedelta(seconds=RECENTLY_DISMISSED_SECONDS))
+            if entity_id is None or s.target.entity_id == entity_id
+        ]
+        if not recent:
+            return
+        last = recent[-1]
+        assert last.finished_at is not None
+        ago = int((now - last.finished_at).total_seconds())
+        how_key = {
+            "device": "how_device",
+            "user": "how_user",
+            "snooze": "how_snooze",
+        }.get(last.dismissed_by or "", "how_other")
+        raise IntentFailed(
+            "err_nothing_ringing_recent",
+            kind=tr(lang, f"The_{last.kind}"),
+            label=" & ".join(a.label_in(lang) for a in last.alarms) or last.label,
+            target=last.target.display,
+            how=tr(lang, how_key, ago=ago),
+        )
+
     async def _handle(self, intent_obj: intent.Intent, response: intent.IntentResponse) -> None:
         now = dt_util.utcnow()
         lang = self._lang(intent_obj)
@@ -972,7 +1024,8 @@ class DismissIntent(_VoiceAlarmIntent):
             target = self._resolve_target(intent_obj, target_query)
             session = self.manager.session_for_target(target.entity_id)
             if session is None:
-                raise IntentFailed("err_nothing_ringing_on", target=target.display)
+                self._raise_if_just_stopped(lang, now, target.entity_id)
+                raise NothingRinging("err_nothing_ringing_on", target=target.display)
             sessions = [session]
         else:
             current = self._current_target(intent_obj)
@@ -981,27 +1034,12 @@ class DismissIntent(_VoiceAlarmIntent):
             else:
                 sessions = self.manager.active_sessions()
         if not sessions:
-            recent = self.manager.recently_finished(timedelta(seconds=RECENTLY_DISMISSED_SECONDS))
-            if recent:
-                last = recent[-1]
-                assert last.finished_at is not None
-                ago = int((now - last.finished_at).total_seconds())
-                how_key = {
-                    "device": "how_device",
-                    "user": "how_user",
-                    "snooze": "how_snooze",
-                }.get(last.dismissed_by or "", "how_other")
-                raise IntentFailed(
-                    "err_nothing_ringing_recent",
-                    kind=tr(lang, f"The_{last.kind}"),
-                    label=" & ".join(a.label_in(lang) for a in last.alarms) or last.label,
-                    target=last.target.display,
-                    how=tr(lang, how_key, ago=ago),
-                )
-            raise IntentFailed("err_nothing_ringing")
+            self._raise_if_just_stopped(lang, now)
+            raise NothingRinging("err_nothing_ringing")
 
         if snooze:
-            created = [await self.manager.async_snooze(s, int(snooze)) for s in sessions]
+            snooze = _minutes(snooze)
+            created = [await self.manager.async_snooze(s, snooze) for s in sessions]
             parts = []
             for session, alarm in zip(sessions, created, strict=True):
                 nxt = alarm.next_pending(dt_util.utcnow())

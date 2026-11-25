@@ -101,7 +101,16 @@ that speaks it.
 The built-in (non-LLM) Assist agent does not have sentences for these intents out of the
 box. You can add your own under `custom_sentences/<lang>/voice_alarms.yaml` targeting the
 intents `VoiceAlarmSet`, `VoiceAlarmList`, `VoiceAlarmDelete`, `VoiceAlarmSkipNext`,
-`VoiceAlarmUpdate` and `VoiceAlarmDismiss`.
+`VoiceAlarmUpdate` and `VoiceAlarmDismiss`. On a pipeline that prefers handling commands
+locally, two answers from those sentences are left to the conversation agent instead of
+being spoken: a stop sentence with nothing ringing ("stop the alarm" may mean disabling
+one), and a time, date, weekday or number of minutes the sentence caught but that does not
+parse ("wake me up at seven-ish", "snooze for ten minutes"). A stop sentence said within
+three minutes after an alarm stopped (on the satellite it names, if it names one) is still
+answered locally ("… was stopped on the device 2 seconds ago"), so the agent cannot take
+it as disabling that alarm. The hand-off only helps when
+the agent can control Home Assistant (its Assist API is on); an agent without the alarm
+tools can only answer in words and might claim an alarm it did not set.
 
 ### Stopping an alarm on the device
 

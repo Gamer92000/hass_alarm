@@ -635,3 +635,18 @@ async def test_alarm_waiting_for_its_satellite_is_next_by_voice(
     text = speech(await handle(hass, INTENT_SKIP_NEXT, bedroom, target="kitchen"))
     assert "today at 10:05" in text
     assert "tomorrow" in text
+
+
+async def test_minutes_in_words_are_handed_on(hass: HomeAssistant, ready, satellites) -> None:
+    # A local sentence may catch minutes as words; that is the LLM's to read, not a crash.
+    kitchen = satellites["kitchen"]["device_id"]
+    response = await handle(hass, INTENT_SET, kitchen, time="07:00", duration_minutes="ten")
+    assert response.error_code == intent.IntentResponseErrorCode.NO_VALID_TARGETS
+    assert speech(response) == "'ten' is not a number of minutes"
+    assert ready.sorted_alarms() == []
+
+    response = await handle(hass, INTENT_SET, kitchen, time="07:00", name="work")
+    assert response.response_type == intent.IntentResponseType.ACTION_DONE
+    response = await handle(hass, INTENT_UPDATE, kitchen, name="work", duration_minutes="five")
+    assert response.error_code == intent.IntentResponseErrorCode.NO_VALID_TARGETS
+    assert speech(response) == "'five' is not a number of minutes"
